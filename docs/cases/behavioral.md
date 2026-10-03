@@ -1,46 +1,68 @@
-# Case 9: `behavioral` (mouse biometrics)
+# `behavioral`: interaction telemetry (mouse, keyboard, touch, motion)
 
-Category: behavioral. Module: `api/app/modules/behavioral.py`. Protected URL: `/protected/behavioral`.
+Category: behavioral · Module: `api/app/modules/behavioral.py` · Protected URL: `/protected/behavioral`
+· Default: on · Module tier: **HIGH** for the concept; every threshold is lab-defined
 
-## Mechanism
-Even when a script runs, the way a pointer moves distinguishes people from scripts: smooth curves, varying
-speed, pauses, changing direction, versus teleports, straight lines and constant timing.
+## What it is
+
+The module judges the interaction telemetry the client captured: how the pointer moved, how keys were typed, whether touch
+and device-motion data look like a person. It reads standard telemetry from `sensor:{sid}` and, on transactional endpoints,
+preferably the inline telemetry captured while the form was filled.
 
 ## How real Akamai uses it
-Public knowledge: the sensor payload includes mouse/touch/keyboard event data and timing, scored
-server-side as part of the telemetry. The lab's thresholds are its own, made up for demonstration.
 
-## How THIS server detects it
-It reads `sensor:{sid}` (written by `sensor_data`, so it needs that flow) and analyses `[x, y, t_ms]` points
-split into strokes at gaps > 120 ms. Penalties are additive (cap 100); `>= 50` fail, `>= 20` warn.
+Akamai's behavioral detection evaluates "movement patterns and other interaction details unique to humans" and is a Bot
+Manager Premier feature (detection-methods page, report §1.2 case 9, [P]). Content Protector analyses user interaction
+(touchscreen, keyboard, mouse) and behaviour across the site ([P], 2024-02-06); the mobile SDK docs, as quoted in 2019,
+list device characteristics, orientation and accelerometer data ([S]). Results feed the Bot Score (0-100) and its
+response segments. Akamai's models and thresholds are not public.
 
-| rule | penalty |
+## Confidence
+
+| Sub-feature | Tier |
 |---|---|
-| no mouse events | 70 (returned immediately) |
-| fewer than 8 points | 60 |
-| >= 80% of shaped strokes (>= 4 points, >= 30 px) are straight (deviation <= max(1.5 px, 1% of chord)) | 50 |
-| median inter-event dt < 0.2 ms (burst injection) | 40 |
-| otherwise dt coefficient of variation < 0.08 | 35 |
-| speed CV < 0.05 | 25 |
-| direction entropy < 0.5 bits (16 bins) | 20 |
-| turn entropy < 0.2 bits (24 bins) | 20 |
-| first event to submit < 150 ms | 30 |
+| The concept: multi-modal behavioral signals feeding the Bot Score | HIGH |
+| All thresholds and weights below | LAB-defined (not Akamai's) |
 
-No sensor at all: fail 90 "no sensor_data posted (no behavioral telemetry)". `details` carries the
-computed metrics.
+No flag.
 
-## How a client passes here
-Drive a real browser and emit many separate `mouse.move` calls along curved, eased, jittered paths with
-small random delays (`bezier_path` / `human_mouse` in `clients/playwright_client.py`: 3 strokes of 70
-points, 8-25 ms apart, seeded RNG 1337).
+## How the lab simulates it
 
-## Observed (real run)
-- naive / curl_cffi: fail 90, "no sensor_data posted (no behavioral telemetry)".
-- Playwright: pass 0, "human-like behavior"; metrics: 102 points, 2 strokes, straight_fraction 0.0,
-  median dt 19.55 ms, cadence CV 0.337, speed CV 0.574, direction entropy 2.699, turn entropy 3.022,
-  dwell 2298.8 ms. (The sensor caps at the first 2 s window after the first move.)
+Modalities are scored independently; a session needs **one** modality with enough data that looks human, and a robotic
+modality always wins (a bot cannot offset a scripted keyboard with a pretty mouse path). Mouse-only and keyboard-only
+humans both pass; zero interaction fails.
 
-## Caveats
-- A scripted Bezier is a synthetic human; a better model would pass. The lab shows the cat-and-mouse
-  dynamic, not a robust biometric system.
-- Only mouse data is judged; key/scroll/touch counts are recorded but unscored.
+- **Mouse**: strokes split at 120 ms pauses. Fewer than 8 points overall 60; 80% or more of strokes straight (max deviation
+  max(1.5 px, 1% of the chord)) 50; median inter-event time below 0.2 ms (burst) 40, else a cadence CV below 0.08 35; speed
+  CV below 0.05 25; direction entropy below 0.5 bits 20; turn entropy below 0.2 bits 20; first event to submit under
+  150 ms 30; no mouse events 70.
+- **Keyboard** (timings only, key identities never collected): at least 8 completed key presses and 5 usable gaps. Median
+  inter-key gap below 8 ms 55, else gap CV below 0.10 45; median dwell below 5 ms or dwell CV below 0.05 40.
+- **Touch**: touchmove strokes go through the same path analysis as the mouse (at least 8 move points).
+- **Form fill** (inline telemetry only): 8 or more characters filled with no key events and no paste 45.
+- **Soft signals** (added on top, never enough alone): constant scroll cadence 20, mobile UA without DeviceMotion or touch
+  points 25, static motion readings 20, interaction without window focus 10.
+
+Score: 50 and above fails, 20-49 warns, below 20 passes ("human-like behavior"). No sensor at all is fail 90 ("no
+sensor_data posted (no behavioral telemetry)"). On `transactional` requests the inline payload is used when its MAC
+verifies (`details["telemetry_type"] = "inline"`), otherwise the standard sensor. `details["segment_hint"]` maps the score
+onto the report's example Bot Score bands; the real segment is decided by the response policy (see `bot_score`).
+
+## How a scraper passes it
+
+Produce human-like timing for at least one modality before the telemetry is sent: a patient mouse path with varying speed
+and direction, or typing with variable intervals and dwell.
+
+## Observed results
+
+| Client | Cell | Verdict and reason |
+|---|---|---|
+| naive | fail | fail 90, "no sensor_data posted (no behavioral telemetry)" |
+| curl_cffi | fail | fail 90, same reason |
+| Playwright (seeded Bezier path with jitter) | pass | pass 0, "human-like behavior" |
+
+## Limits and caveats
+
+- Synthetic Bezier paths with jitter, or replayed recordings, can pass: this is a lab teaching model, not a research-grade
+  classifier (and the Playwright case shows it).
+- Akamai's 2026 interactive behavioral challenge is a separate case: [`interactive_challenge`](interactive_challenge.md).
