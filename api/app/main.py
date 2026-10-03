@@ -196,6 +196,30 @@ def create_app(
         if root is not None:
             app.include_router(root)
 
+    async def sec_verify(request: Request, provider: str | None = None) -> Response:
+        """Shared vendor-style verify paths (``/_sec/verify?provider=<p>``). Every challenge
+        provider redeems its own tokens through ``verify_challenge``; a token no module issued
+        is answered like a replayed one."""
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        token = (body.get("token") or body.get("bm-verify")) if isinstance(body, dict) else None
+        if not isinstance(token, str) or not token:
+            return JSONResponse({"ok": False, "error": "bad_request"}, status_code=400)
+        if not request.cookies.get(COOKIE_BM_SZ):
+            return JSONResponse({"ok": False, "error": "no_session"}, status_code=400)
+        for m in registry.all():
+            if not m.challenge_providers or (provider and provider not in m.challenge_providers):
+                continue
+            resp: Response | None = await m.verify_challenge(request, token, body, provider)
+            if resp is not None:
+                return resp
+        return JSONResponse({"ok": False, "error": "unknown_or_replayed"}, status_code=403)
+
+    for verify_path in ("/_sec/verify", "/_sec/cp_challenge/verify"):
+        app.add_api_route(verify_path, sec_verify, methods=["POST"])
+
     async def context_for(
         request: Request, endpoint_class: EndpointClass = EndpointClass.PROTECTED
     ) -> RequestContext:

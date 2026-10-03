@@ -60,8 +60,12 @@ flags and challenge providers; the README table lists every module with its tier
 - Every scored response carries the lab-only `X-Lab-Report-Id`; `GET /api/requests/{id}` returns the report. The harness judges a
   case from the case's own signal in that report, never from the HTTP status.
 - Module routes: `/akam/<slug>/...` via `DetectionModule.router()`; site-root routes via `root_router()` (for example
-  `/_sec/verify`, `/_sec/cp_challenge/...`, `/.well-known/http-message-signatures-directory`); any other unrouted GET/POST path
-  goes through the catch-all (registered last) to each module's `handle_dynamic()`.
+  `/_sec/cp_challenge/...`, `/.well-known/http-message-signatures-directory`); any other unrouted GET/POST path goes through the
+  catch-all (registered last) to each module's `handle_dynamic()`.
+- Shared verify paths, owned by `main.py`: `POST /_sec/verify?provider=<p>` and `POST /_sec/cp_challenge/verify`, body a JSON
+  object with `token` or `bm-verify` (400 `bad_request` otherwise, 400 `no_session` without `bm_sz`). The token goes to
+  `verify_challenge` of each module that serves `<p>` (every challenge provider when `provider` is absent) until one claims it;
+  a token nobody issued is 403 `unknown_or_replayed`.
 - Control plane (dashboard and harness): `GET /api/modules`, `PUT /api/modules/{slug}` `{"enabled": bool}`,
   `GET|PUT|DELETE /api/policy` (PUT deep-merges a partial `{bands, actions, params}`; 422 on invalid), `GET /api/requests`
   (`limit`, `reference`, `canary`), `GET /api/requests/{id}`, `GET /api/reference/{ref}`, `GET /api/canary/{token}`,
@@ -128,6 +132,8 @@ are fine; encodings are lab-defined. The flags and their tiers are listed in the
   `async challenge_satisfied(ctx, provider=None) -> bool` — challenge actions: the policy's `challenge_provider` picks the enabled
   module that lists it; `html` is true for navigations (interstitial) and false for API callers (428 JSON); a satisfied
   challenge downgrades `challenge` to `monitor`. A module that does not serve a provider must return False for it.
+- `async verify_challenge(request, token, body, provider) -> Response | None` (v2.2) — redeem a token posted to the shared
+  verify paths. Return a `Response` when this module issued the token, `None` when it did not.
 - `async after_score(ctx, report) -> None` — called on every enabled module after the engine decided segment and action;
   learn from the outcome or arm follow-up work. Must not raise.
 - `async pre_request(request, ctx) -> Response | None` — access gate run before scoring on page and protected requests; return a

@@ -246,8 +246,9 @@ headers. `docs/cases/<slug>.md` lists every threshold. A module error shows up a
    | `client_scripts` | static script paths relative to `/akam/<slug>/`, injected into HTML pages |
    | `page_snippets(ctx)` | raw HTML injected before `</body>` of every lab page (per-session script paths, embedded values) |
    | `handle_dynamic(request, ctx)` | claim an unrouted same-origin GET or POST path (random script paths); return a `Response` or `None` |
-   | `router()` / `root_router()` | routes under `/akam/<slug>/` / at the site root (for absolute vendor-style paths such as `/_sec/verify`) |
+   | `router()` / `root_router()` | routes under `/akam/<slug>/` / at the site root (for absolute vendor-style paths such as `/_sec/cp_challenge/...`) |
    | `challenge_providers`, `issue_challenge(request, ctx, provider, html=)`, `challenge_satisfied(ctx, provider)` | serve a challenge when the policy's `challenge_provider` names yours (428 JSON for XHR, a page for navigations); report that the session already solved it so the engine downgrades `challenge` to `monitor` instead of looping |
+   | `verify_challenge(request, token, body, provider)` | redeem a token your module issued when it is posted to the shared `POST /_sec/verify?provider=<p>` route; return `None` for a token that is not yours |
    | `pre_request(request, ctx)` | an access gate that runs before scoring on page and protected requests (a waiting room); return a `Response` to short-circuit |
    | `after_score(ctx, report)` | learn from the final segment and action (profiles) or arm follow-up work (step-up collection); must not raise |
 

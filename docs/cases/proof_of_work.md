@@ -57,7 +57,8 @@ and `adaptive_count` (3). The puzzle difficulty is the constant 4.
   `{provider, token, nonce, difficulty, timestamp, timeout, chlg_duration, ...}`; for navigations it answers an HTML page with
   `<iframe id="sec-cpt-if" provider challenge="<base64 JSON>" data-duration src="/_sec/cp_challenge/message.htm?provider=...">`
   and the lab-written solver `/_sec/cp_challenge/sec-cpt-1.0.js`, which reloads after a solve.
-- **Verify**: `POST /_sec/verify?provider=<p>` or `POST /_sec/cp_challenge/verify` (mounted by `root_router`), plus the legacy lab
+- **Verify**: `POST /_sec/verify?provider=<p>` or `POST /_sec/cp_challenge/verify` (the engine's shared verify route, which hands
+  the token to this module's `verify_challenge`), plus the legacy lab
   routes `GET /akam/proof_of_work/challenge?variant=hard|simple&provider=...`, `POST /akam/proof_of_work/verify` and
   `GET /akam/proof_of_work/pow.js` (same enforcement). Body `{"token", "answer"|"answers"}`. The challenge (`pow:ch:{token}`) is
   consumed even on failure. Errors (403): `unknown_or_replayed`, `wrong_session`, `wrong_provider`, `expired`, `bad_answer`,
@@ -145,11 +146,11 @@ sources show a reload or a `<meta http-equiv="refresh">` carrying a single-use t
   `challenge_timeout` (60 s). Failures are the other variants' reasons: `unknown_or_replayed`, `wrong_session`, `expired`,
   `wrong_provider`, `bad_answer`, `wrong_answer`. There is no minimum wait for this variant (the `chlg_duration` wait applies
   to the hard proof of work only).
-- **Verify routes**: `POST /_sec/verify?provider=interstitial` (the vendor-style absolute path, mounted by `root_router`, the
-  same path the public sources show and the one `crypto` and `adaptive` already use) and the lab alias
+- **Verify routes**: `POST /_sec/verify?provider=interstitial` (the vendor-style absolute path, the engine's shared verify
+  route, the same path the public sources show and the one `crypto` and `adaptive` already use) and the lab alias
   `POST /akam/proof_of_work/interstitial/verify`. The alias exists because every module's own routes live under
   `/akam/<slug>/` (as do the legacy `challenge`, `verify` and `pow.js` routes and the on-demand page below), so lab and
-  harness clients get a namespaced path with identical enforcement (both call the same `_verify`). Body
+  harness clients get a namespaced path with identical enforcement (both call the same `verify_challenge`). Body
   `{"bm-verify": token, "pow": int}`.
 - **On success**: `pow:interstitial:{sid}` is stored (3600 s) and the lab issues or refreshes `bm_sz`, `ak_bmsc` and `_abck`
   through its own cookie issuance (`main.finalize_cookies`). It does **not** set `sec_cpt` and does **not** mark `_abck`

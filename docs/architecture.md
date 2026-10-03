@@ -31,8 +31,10 @@ from is [research/akamai-audit-2026-10.md](research/akamai-audit-2026-10.md).
    - Scored: `GET /` (page), `GET /protected/<slug>` and `GET /protected/all` (protected), `POST /api/login` and
      `POST /api/checkout` (transactional), `GET|POST /mobile/api/*` (mobile). `/protected/<slug>` evaluates only that module
      (if it is disabled there are no signals, so the resource is served).
-   - Module routes: `/akam/<slug>/...` (`router()`), absolute vendor-style paths such as `/_sec/verify` and
-     `/.well-known/http-message-signatures-directory` (`root_router()`), and a catch-all **mounted last** that offers every other
+   - Module routes: `/akam/<slug>/...` (`router()`), absolute vendor-style paths such as `/_sec/cp_challenge/...` and
+     `/.well-known/http-message-signatures-directory` (`root_router()`), the shared challenge verify paths
+     `POST /_sec/verify?provider=<p>` and `POST /_sec/cp_challenge/verify` (each challenge provider redeems its own tokens
+     through `verify_challenge()`), and a catch-all **mounted last** that offers every other
      unrouted GET/POST path to each module's `handle_dynamic()` (per-session random sensor, pixel and SBSD paths) and otherwise
      answers 404 (and bumps the `SCANTL` reputation counter). Not scored, not in the feed.
    - Control plane (not scored): `GET /api/modules`, `PUT /api/modules/{slug}`, `GET|PUT|DELETE /api/policy`,

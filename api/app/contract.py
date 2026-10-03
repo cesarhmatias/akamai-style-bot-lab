@@ -147,7 +147,7 @@ class ScoreReport(BaseModel):
     # --- v2.1 (additive) ---------------------------------------------------------------
     is_human: bool = False  # Bot Score 0: no detection fired (EdgeWorkers isHuman() analogue)
     is_safeguard: bool = False  # set aside so a human is not trapped (isSafeguardResponse analogue)
-    challenge_provider: str = ""  # crypto | behavioral | adaptive | interactive (when challenged)
+    challenge_provider: str = ""  # crypto | behavioral | adaptive | interactive | interstitial
 
 
 class SessionStore(Protocol):
@@ -271,6 +271,16 @@ class DetectionModule(ABC):
         """v2.1: build the challenge response (a fastapi Response) for the ``challenge`` action.
         ``html`` is True for browser navigations (interstitial page), False for XHR/API
         callers (428 JSON). Return None to decline."""
+        return None
+
+    async def verify_challenge(
+        self, request: Any, token: str, body: dict[str, Any], provider: str | None
+    ) -> Any | None:
+        """v2.2: redeem ``token`` posted to the shared vendor-style verify paths
+        (``POST /_sec/verify`` and ``POST /_sec/cp_challenge/verify``, mounted by ``main.py``).
+        ``body`` is the parsed JSON object and ``provider`` the ``?provider=`` value (None when
+        absent). Return a Response when this module issued the token, None when it did not: the
+        route then asks the next module that serves ``provider``."""
         return None
 
     async def handle_dynamic(self, request: Any, ctx: RequestContext) -> Any | None:

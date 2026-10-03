@@ -64,8 +64,9 @@ The interstitial (cookieless gate)
       ``i`` is the issuing Unix time (the observed 1789910678 is 2026-09-20 UTC, inside the
       capture window: an inference) and the parts have 4 and 5 digits, so ``pow`` often
       exceeds 2**31 - 1, as the observed one does (a 32-bit signed solver overflows).
-    * Verify: ``POST /_sec/verify?provider=interstitial`` (vendor-style absolute path, via
-      ``root_router``) and ``POST /akam/proof_of_work/interstitial/verify`` (lab alias), body
+    * Verify: ``POST /_sec/verify?provider=interstitial`` (vendor-style absolute path, the
+      engine's shared verify route) and ``POST /akam/proof_of_work/interstitial/verify`` (lab
+      alias), body
       ``{"bm-verify": token, "pow": int}``. On success the lab stores
       ``pow:interstitial:{sid}``, issues/refreshes ``bm_sz``, ``ak_bmsc`` and ``_abck`` through
       ``main.finalize_cookies`` and answers ``{"ok": true, ...}``; the page then reloads.
@@ -788,19 +789,15 @@ class ProofOfWork(DetectionModule):
             return None  # one navigation passes; nothing is cleared
         return await self.interstitial_response(request, ctx, html=True)
 
-    # -- routes --------------------------------------------------------------------------
-    async def _verify(self, request: Request, provider: str | None) -> Response:
-        sid = request.cookies.get("bm_sz", "")
-        try:
-            body = await request.json()
-            token = str(body.get("token") or body.get("bm-verify") or body["challenge_id"])
-            if not isinstance(body, dict):
-                raise TypeError
-        except (ValueError, KeyError, TypeError, AttributeError):
-            return JSONResponse({"ok": False, "error": "bad_request"}, status_code=400)
-        if not sid:
-            return JSONResponse({"ok": False, "error": "no_session"}, status_code=400)
+    # -- verification ----------------------------------------------------------------------
+    async def verify_challenge(
+        self, request: Request, token: str, body: dict[str, Any], provider: str | None
+    ) -> Response | None:
+        """Redeem a token this module issued (the engine's shared ``/_sec/verify`` route)."""
         store = request.app.state.store
+        if await store.get(f"pow:ch:{token}") is None:
+            return None  # not ours: the route asks the next challenge provider
+        sid = request.cookies.get("bm_sz", "")
         ok, reason, rec = await self.check(store, sid, token, body, provider)
         if not ok:
             extra = {"retry_after": round(rec["retry_after"], 2)} if "retry_after" in rec else {}
@@ -816,17 +813,23 @@ class ProofOfWork(DetectionModule):
             await finalize_cookies(request, resp, store, flags)
         return resp
 
+    async def _verify_lab_route(self, request: Request, provider: str | None) -> Response:
+        """The legacy lab aliases under ``/akam/proof_of_work/`` (same enforcement)."""
+        try:
+            body = await request.json()
+            token = str(body.get("token") or body.get("bm-verify") or body["challenge_id"])
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return JSONResponse({"ok": False, "error": "bad_request"}, status_code=400)
+        if not request.cookies.get("bm_sz"):
+            return JSONResponse({"ok": False, "error": "no_session"}, status_code=400)
+        resp = await self.verify_challenge(request, token, body, provider)
+        return resp or JSONResponse({"ok": False, "error": "unknown_or_replayed"}, status_code=403)
+
+    # -- routes --------------------------------------------------------------------------
     def root_router(self) -> APIRouter:
-        """Vendor-style absolute paths (report §1.2 case 6, tier MEDIUM)."""
+        """Vendor-style absolute paths (report §1.2 case 6, tier MEDIUM). Verification goes
+        through the engine's shared ``/_sec/verify`` route (``verify_challenge``)."""
         r = APIRouter()
-
-        @r.post("/_sec/verify")
-        async def sec_verify(request: Request, provider: str | None = None) -> Response:
-            return await self._verify(request, provider)
-
-        @r.post("/_sec/cp_challenge/verify")
-        async def cp_verify(request: Request, provider: str | None = None) -> Response:
-            return await self._verify(request, provider)
 
         @r.get(f"/_sec/cp_challenge/{SCRIPT_NAME}")
         async def script() -> Response:
@@ -899,11 +902,11 @@ class ProofOfWork(DetectionModule):
 
         @r.post("/interstitial/verify")
         async def interstitial_verify(request: Request) -> Response:
-            return await self._verify(request, INTERSTITIAL)
+            return await self._verify_lab_route(request, INTERSTITIAL)
 
         @r.post("/verify")
         async def verify(request: Request) -> Response:
-            return await self._verify(request, None)
+            return await self._verify_lab_route(request, None)
 
         @r.get("/pow.js")
         async def pow_js() -> Response:
