@@ -1,4 +1,4 @@
-"""Proof-of-work / ``sec_cpt`` challenge (case 6, audit §1.2 case 6 and §2.4).
+r"""Proof-of-work / ``sec_cpt`` challenge (case 6, audit §1.2 case 6 and §2.4).
 
 Mechanism
     A client that cannot execute JavaScript, store cookies and spend time is stopped by a
@@ -19,6 +19,15 @@ How real Akamai uses it (report §2.4 and §1.2 case 6)
       ``/_sec/verify?provider=crypto|adaptive`` or ``/_sec/cp_challenge/verify``; a solved
       challenge leaves a ``sec_cpt`` cookie containing ``~3~``. Providers: ``crypto`` (PoW plus
       wait), ``behavioral`` (sensor data) and ``adaptive`` (both, ``count`` solutions).
+    * Tier MEDIUM (Bot Manager brief + community/HAR observations): the cookieless
+      INTERSTITIAL. The brief describes an interstitial challenge that "requires clients to
+      prove they support storing cookies and executing JavaScript". Observed pages carry a
+      ``bm-verify`` token and an embedded script of the form
+      ``var i = 1234; var j = i + Number("56" + "78");`` and POST JSON
+      ``{"bm-verify": <token>, "pow": <i + int(a+b)>}`` to ``/_sec/verify?provider=interstitial``;
+      cookies are then issued and the page reloads. The cookie-issuing step and the page's
+      exact wording are approximations. A JSON ``location`` in the reply is UNCONFIRMED (the
+      sources show reload / meta-refresh, not a JSON location).
     The puzzle algorithm, challenge field values and cookie value are LAB-DEFINED; none of
     this is Akamai's encoding.
 
@@ -38,8 +47,39 @@ How the lab simulates it
       the ``crypto`` flow in the background so a real browser holds a valid ``sec_cpt`` before
       it reaches a protected resource. Akamai does not do this; it is a LAB convenience that
       keeps the harness's browser case meaningful.
-    * LAB-ONLY (confidence ``lab``, no known Akamai analogue): the legacy arithmetic ``simple``
-      variant (``/akam/proof_of_work/challenge?variant=simple``). Solving it alone only WARNs.
+    * ``interstitial`` (tier MEDIUM, see below): the cookieless arithmetic interstitial.
+    * ``simple``: the old free-form arithmetic expression (``a op b op c``) the first lab
+      version used (``/akam/proof_of_work/challenge?variant=simple``). It is a lab device kept
+      for the harness and is NOT the interstitial. Solving it alone only WARNs.
+
+The interstitial (cookieless gate)
+    * Page: HTTP 200 HTML with a per-issuance ``bm-verify`` token bound to ``bm_sz`` (single
+      use, expires after ``challenge_timeout``; same failure reasons as the other variants:
+      ``unknown_or_replayed``, ``wrong_session``, ``expired``). The arithmetic is DATA in an
+      inline script; the server computes the expected ``pow`` from its stored spec
+      (``i`` and the digit parts), never from the page text and never with ``eval``.
+    * Verify: ``POST /_sec/verify?provider=interstitial`` (vendor-style absolute path, via
+      ``root_router``) and ``POST /akam/proof_of_work/interstitial/verify`` (lab alias), body
+      ``{"bm-verify": token, "pow": int}``. On success the lab issues/refreshes ``bm_sz``,
+      ``ak_bmsc`` and ``_abck`` exactly as its own cookie issuance does (``main.finalize_cookies``),
+      stores ``pow:interstitial:{sid}`` and answers ``{"ok": true, ...}``; the page then reloads.
+      ``location`` is only returned when the issuing request path is a same-origin path
+      (``safe_location`` rejects anything with a scheme, netloc, ``//`` or backslash).
+    * Gate: with the flag ``pow_cookieless_gate`` (MEDIUM, default OFF because it changes the
+      first-visit behaviour of every client) a navigation that arrives without ``bm_sz`` and
+      ``_abck`` is served this page instead of the resource; solving it clears the session.
+      The ``interstitial`` challenge provider serves the same page (HTML) or a 428 JSON with
+      the same token and expression fields (XHR).
+    * Scoring: a fixed regex solves the basic page without running any JavaScript, so a solved
+      interstitial only WARNs (30) like ``simple``. Only the hard sha256 proof of work PASSes.
+      Precedence: hard > interstitial/simple > none.
+    * Hardening (flag ``pow_interstitial_hardened``, confidence LAB, default OFF): the page's
+      arithmetic shape is randomized per issuance (identifier names, number of concatenated
+      string parts, operand order, whitespace, quote style, ``Number`` / ``parseInt(..,10)`` /
+      unary plus, decimal or hex ``i``, ``var`` / ``let``) so a fixed regex such as
+      ``var\s+j\s*=\s*i\s*\+\s*Number\("(\d+)"\s*\+\s*"(\d+)"\)`` stops matching and only a
+      client that interprets the script (or a robust JS parser) answers correctly. This is a lab
+      device, not an Akamai feature; a determined solver can still interpret the script.
 
 How a client passes it
     Challenge via the 428 JSON (or iframe attributes), solve, wait ``chlg_duration`` seconds,
@@ -62,6 +102,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -80,6 +121,9 @@ DEFAULT_DIFFICULTY = 4
 SCRIPT_NAME = "sec-cpt-1.0.js"
 SCRIPT_URL = f"/_sec/cp_challenge/{SCRIPT_NAME}"
 PROVIDERS = ("crypto", "behavioral", "adaptive")
+INTERSTITIAL = "interstitial"
+INTERSTITIAL_PAGE_PATH = "/akam/proof_of_work/interstitial"  # on-demand route (router mount)
+INTERSTITIAL_SCORE = 30  # a regex can solve the basic page: WARN, never PASS
 COOKIE = "sec_cpt"
 STATE_TTL = 3600
 # An unsolved challenge is a gray signal, not proof of automation: 45 lands in the "strict"
@@ -193,6 +237,95 @@ def sub_nonce(nonce: str, index: int, count: int) -> str:
     return nonce if count == 1 else f"{nonce}.{index}"
 
 
+def safe_location(target: str | None) -> str | None:
+    """Same-origin guard for the optional ``location`` in the interstitial reply.
+
+    Only a plain absolute PATH is accepted: anything with a scheme or netloc, protocol-relative
+    ``//host``, backslashes or control characters is rejected (returns None)."""
+    if not target or not target.startswith("/") or target.startswith("//"):
+        return None
+    if "\\" in target or any(ord(c) < 32 or ord(c) == 127 for c in target):
+        return None
+    parts = urlsplit(target)
+    return None if parts.scheme or parts.netloc else target
+
+
+def new_interstitial_spec(rng: random.Random, hardened: bool) -> dict[str, Any]:
+    """The arithmetic as DATA: ``pow = i + int("".join(parts))``."""
+    if not hardened:
+        return {"i": rng.randint(1000, 9999), "parts": [str(rng.randint(10, 99)) for _ in range(2)]}
+    digits = str(rng.randint(1, 9)) + "".join(
+        str(rng.randint(0, 9)) for _ in range(rng.randint(3, 7))
+    )
+    n = rng.randint(2, min(4, len(digits)))
+    cuts = sorted(rng.sample(range(1, len(digits)), n - 1))
+    parts = [digits[a:b] for a, b in zip([0, *cuts], [*cuts, len(digits)], strict=True)]
+    return {"i": rng.randint(100, 99999), "parts": parts}
+
+
+def expected_pow(spec: dict[str, Any]) -> int:
+    """The server's answer, computed from the stored spec only (never from page text)."""
+    return int(spec["i"]) + int("".join(spec["parts"]))
+
+
+def render_arithmetic(rng: random.Random, spec: dict[str, Any], hardened: bool) -> tuple[str, str]:
+    """JavaScript statements computing the answer, and the name of the result variable.
+
+    Basic form (the observed shape): ``var i = 1234; var j = i + Number("56" + "78");``."""
+    if not hardened:
+        a, b = spec["parts"]
+        return f'var i = {spec["i"]}; var j = i + Number("{a}" + "{b}");', "j"
+    names: list[str] = []
+    while len(names) < 3:
+        n = rng.choice("abcdefghklmnpqrstuvwxyz_$") + "".join(
+            rng.choice("abcdefghijklmnopqrstuvwxyz0123456789_") for _ in range(rng.randint(2, 6))
+        )
+        if n not in names and n not in {"i", "j", "var", "let", "new", "for", "if", "do", "in"}:
+            names.append(n)
+    vi, vj, vz = names
+
+    def ws() -> str:
+        return rng.choice(["", " ", "  ", "\t", "\n "])
+
+    def lit(part: str) -> str:
+        q = rng.choice(["'", '"'])
+        return f"{q}{part}{q}"
+
+    cat = f"{ws()}+{ws()}".join(lit(x) for x in spec["parts"])
+    conv = rng.choice(
+        [f"Number({cat})", f"parseInt({cat},{ws()}10)", f"(+({cat}))", f"Number({ws()}{cat}{ws()})"]
+    )
+    i_lit = hex(spec["i"]) if rng.random() < 0.4 else str(spec["i"])
+    expr = f"{vi}{ws()}+{ws()}{conv}" if rng.random() < 0.5 else f"{conv}{ws()}+{ws()}{vi}"
+    kw = rng.choice(["var", "let"])
+    stmts = [f"{kw} {vi}{ws()}={ws()}{i_lit}", f"{kw} {vj}{ws()}={ws()}{expr}"]
+    if rng.random() < 0.5:  # a decoy declaration that is not part of the answer
+        stmts.insert(rng.randint(0, 2), f"{kw} {vz} = {rng.randint(1, 999)}")
+    return (";" + ws()).join(stmts) + ";", vj
+
+
+def render_interstitial(token: str, arithmetic: str, result: str) -> str:
+    """The cookieless interstitial page (HTTP 200). Lab-written markup, not Akamai's."""
+    return (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        "<title>Checking your browser</title></head>"
+        '<body style="font-family:system-ui,sans-serif;text-align:center;margin-top:3rem">'
+        "<p>Checking your browser&hellip;</p><script>(function(){"
+        f"{arithmetic}"
+        'fetch("/_sec/verify?provider=interstitial",{method:"POST",credentials:"same-origin",'
+        'headers:{"Content-Type":"application/json"},'
+        f'body:JSON.stringify({{"bm-verify":"{token}","pow":{result}}})}})'
+        ".then(function(r){return r.json()}).then(function(d){if(!d||!d.ok){return}"
+        # Follow only a same-origin path (mirrors safe_location). Reloading the on-demand
+        # interstitial route would just issue a fresh interstitial, so leave it for "/".
+        'var l=d.location;if(typeof l==="string"&&/^\\/(?![\\/\\\\])[^\\x00-\\x1f\\\\]*$/.test(l))'
+        "{location.replace(l)}"
+        f'else if(location.pathname==="{INTERSTITIAL_PAGE_PATH}"){{location.replace("/")}}'
+        "else{location.reload()}})"
+        ".catch(function(){});})();</script></body></html>"
+    )
+
+
 @dataclass
 class Settings:
     duration: float
@@ -213,8 +346,27 @@ class ProofOfWork(DetectionModule):
     category: ClassVar[str] = "js"
     confidence: ClassVar[Confidence] = Confidence.MEDIUM
     client_scripts: ClassVar[list[str]] = ["pow.js"]
-    challenge_providers: ClassVar[frozenset[str]] = frozenset(PROVIDERS)
-    flags: ClassVar[list[FlagSpec]] = []
+    challenge_providers: ClassVar[frozenset[str]] = frozenset({*PROVIDERS, INTERSTITIAL})
+    flags: ClassVar[list[FlagSpec]] = [
+        FlagSpec(
+            name="pow_cookieless_gate",
+            description="Serve the cookieless arithmetic interstitial to navigations that "
+            "arrive without bm_sz/_abck (Bot Manager brief: prove cookie and JavaScript "
+            "support). Off by default because it changes every client's first visit.",
+            confidence=Confidence.MEDIUM,
+            default=False,
+            source="audit §1.2 case 6; Bot Manager brief",
+        ),
+        FlagSpec(
+            name="pow_interstitial_hardened",
+            description="LAB device: randomize the interstitial's arithmetic shape per "
+            "issuance (names, parts, operand order, quotes, Number/parseInt) so fixed "
+            "regex solvers break. Not an Akamai feature.",
+            confidence=Confidence.LAB,
+            default=False,
+            source="lab",
+        ),
+    ]
 
     def __init__(
         self,
@@ -250,7 +402,7 @@ class ProofOfWork(DetectionModule):
 
     # -- verdict -------------------------------------------------------------------------
     async def _state(self, ctx: RequestContext) -> tuple[str, dict[str, Any]]:
-        """('ok'|'forged'|'missing'|'expired'|'simple'|'none', details) for this session."""
+        """(state, details): ok | forged | missing | expired | interstitial | simple | none."""
         sid = ctx.session_id
         raw = await ctx.store.get(f"pow:{sid}") if sid else None
         if raw:
@@ -265,6 +417,8 @@ class ProofOfWork(DetectionModule):
             if age > interval:
                 return "expired", {"age": round(age, 1), "interval": interval}
             return "ok", {"provider": rec.get("provider"), "age": round(age, 1)}
+        if sid and await ctx.store.get(f"pow:{INTERSTITIAL}:{sid}"):
+            return INTERSTITIAL, {}
         if sid and await ctx.store.get(f"pow:simple:{sid}") == "ok":
             return "simple", {}
         return "none", {}
@@ -289,18 +443,36 @@ class ProofOfWork(DetectionModule):
                 rechallenge=True,
                 **d,
             )
+        if state == INTERSTITIAL:
+            return self.signal(
+                Verdict.WARN,
+                INTERSTITIAL_SCORE,
+                "only the basic arithmetic interstitial was solved (a regex can do that)",
+            )
         if state == "simple":
             return self.signal(
-                Verdict.WARN, 30, "only the LAB-only arithmetic challenge was solved"
+                Verdict.WARN, INTERSTITIAL_SCORE, "only the lab's free-form arithmetic was solved"
             )
         return self.signal(Verdict.FAIL, UNSOLVED_SCORE, "no proof of work solved for this session")
 
     async def challenge_satisfied(self, ctx: RequestContext, provider: str | None = None) -> bool:
-        return (await self._state(ctx))[0] == "ok"
+        # Only vouch for providers this module serves: a crypto sec_cpt must not satisfy
+        # another module's challenge (e.g. the interactive tile game).
+        if provider is not None and provider not in self.challenge_providers:
+            return False
+        state = (await self._state(ctx))[0]
+        return state == "ok" or (provider == INTERSTITIAL and state == INTERSTITIAL)
 
     # -- challenge generation ------------------------------------------------------------
     async def make_challenge(
-        self, store: Any, sid: str, provider: str, variant: str = "hard"
+        self,
+        store: Any,
+        sid: str,
+        provider: str,
+        variant: str = "hard",
+        *,
+        hardened: bool = False,
+        return_to: str | None = None,
     ) -> dict[str, Any]:
         """Create and persist a challenge; return the public payload (token = challenge_id)."""
         cfg = await self.settings(store)
@@ -333,9 +505,21 @@ class ProofOfWork(DetectionModule):
                 nonce=None,
                 difficulty=0,
                 lab_only=True,
-                note="LAB-only arithmetic variant; no known Akamai analogue",
+                note="free-form lab expression; the Akamai-style arithmetic is 'interstitial'",
             )
             record["answer"] = eval_expression(expr)
+        elif variant == INTERSTITIAL:
+            spec = new_interstitial_spec(self.rng, hardened)
+            arithmetic, result = render_arithmetic(self.rng, spec, hardened)
+            public.update(
+                {
+                    "bm-verify": token,
+                    "expression": arithmetic,
+                    "result_var": result,
+                    "hardened": hardened,
+                }
+            )
+            record.update(spec=spec, return_to=safe_location(return_to))
         else:
             count = cfg.adaptive_count if provider == "adaptive" else 1
             difficulty = max(1, cfg.difficulty - 1) if count > 1 else cfg.difficulty
@@ -367,7 +551,7 @@ class ProofOfWork(DetectionModule):
         rec = json.loads(raw)
         if rec["sid"] != sid:
             return False, "wrong_session", rec
-        if provider and provider != rec["provider"] and rec["variant"] == "hard":
+        if provider and provider != rec["provider"] and rec["variant"] != "simple":
             return False, "wrong_provider", rec
         elapsed = self.clock() - rec["issued_at"]
         if elapsed > rec["timeout"]:
@@ -375,6 +559,8 @@ class ProofOfWork(DetectionModule):
         try:
             if rec["variant"] == "simple":
                 ok = int(body["answer"]) == rec["answer"]
+            elif rec["variant"] == INTERSTITIAL:
+                ok = int(body["pow"]) == expected_pow(rec["spec"])  # from the stored spec only
             elif rec["provider"] == "behavioral":
                 ok = True
             else:
@@ -402,6 +588,15 @@ class ProofOfWork(DetectionModule):
         if rec["variant"] == "simple":
             await store.set(f"pow:simple:{sid}", "ok", ttl=STATE_TTL)
             return resp
+        if rec["variant"] == INTERSTITIAL:
+            await store.set(
+                f"pow:{INTERSTITIAL}:{sid}", json.dumps({"solved_at": self.clock()}), ttl=STATE_TTL
+            )
+            # UNCONFIRMED: sources show a page reload / meta-refresh, not a JSON location.
+            # Only a same-origin path (taken from the request that was challenged) is returned.
+            if rec.get("return_to"):
+                resp = JSONResponse({**json.loads(bytes(resp.body)), "location": rec["return_to"]})
+            return resp
         now = self.clock()
         cookie = f"{self.rng.getrandbits(128):032X}~3~{int(now)}"
         await store.set(
@@ -417,6 +612,8 @@ class ProofOfWork(DetectionModule):
     async def issue_challenge(
         self, request: Request, ctx: RequestContext, provider: str, *, html: bool
     ) -> Response | None:
+        if provider == INTERSTITIAL:
+            return await self.interstitial_response(request, ctx, html=html)
         if provider not in PROVIDERS:
             return None
         public = await self.make_challenge(ctx.store, ctx.session_id, provider)
@@ -438,12 +635,44 @@ class ProofOfWork(DetectionModule):
         )
         return HTMLResponse(page, headers=headers)
 
+    # -- cookieless interstitial -------------------------------------------------------
+    async def interstitial_response(
+        self, request: Request, ctx: RequestContext, *, html: bool
+    ) -> Response:
+        """HTML page (200) or, for XHR, a 428 JSON carrying the same token and expression."""
+        return_to = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        public = await self.make_challenge(
+            ctx.store,
+            ctx.session_id,
+            INTERSTITIAL,
+            INTERSTITIAL,
+            hardened=ctx.flag("pow_interstitial_hardened"),
+            return_to=return_to,
+        )
+        headers = {"Cache-Control": "no-store"}
+        if not html:
+            for k in ("challenge_id", "variant", "expires_in", "result_var"):
+                public.pop(k, None)
+            return JSONResponse(public, status_code=428, headers=headers)
+        page = render_interstitial(public["token"], public["expression"], public["result_var"])
+        return HTMLResponse(page, headers=headers)
+
+    async def pre_request(self, request: Request, ctx: RequestContext) -> Response | None:
+        """Cookieless gate (flag ``pow_cookieless_gate``, default off): a navigation that
+        arrives without ``bm_sz`` and ``_abck`` gets the interstitial instead of the page."""
+        if not ctx.flag("pow_cookieless_gate") or request.method != "GET":
+            return None
+        accept = request.headers.get("accept", "")
+        if "text/html" not in accept or ("bm_sz" in ctx.cookies and "_abck" in ctx.cookies):
+            return None
+        return await self.interstitial_response(request, ctx, html=True)
+
     # -- routes --------------------------------------------------------------------------
     async def _verify(self, request: Request, provider: str | None) -> Response:
         sid = request.cookies.get("bm_sz", "")
         try:
             body = await request.json()
-            token = str(body.get("token") or body["challenge_id"])
+            token = str(body.get("token") or body.get("bm-verify") or body["challenge_id"])
             if not isinstance(body, dict):
                 raise TypeError
         except (ValueError, KeyError, TypeError, AttributeError):
@@ -455,7 +684,13 @@ class ProofOfWork(DetectionModule):
         if not ok:
             extra = {"retry_after": round(rec["retry_after"], 2)} if "retry_after" in rec else {}
             return JSONResponse({"ok": False, "error": reason, **extra}, status_code=403)
-        return await self.accept(store, sid, rec)
+        resp = await self.accept(store, sid, rec)
+        if rec["variant"] == INTERSTITIAL:
+            # issue/refresh bm_sz, ak_bmsc and _abck the way the lab models cookie issuance
+            from app.main import finalize_cookies  # late import: main discovers this module
+
+            await finalize_cookies(request, resp, store)
+        return resp
 
     def root_router(self) -> APIRouter:
         """Vendor-style absolute paths (report §1.2 case 6, tier MEDIUM)."""
@@ -494,12 +729,43 @@ class ProofOfWork(DetectionModule):
             sid = request.cookies.get("bm_sz", "")
             if not sid:
                 return JSONResponse({"error": "no_session"}, status_code=400)
-            if variant not in ("simple", "hard"):
+            if variant not in ("simple", "hard", INTERSTITIAL):
                 return JSONResponse({"error": "bad_variant"}, status_code=400)
             if provider not in PROVIDERS:
                 return JSONResponse({"error": "bad_provider"}, status_code=400)
-            public = await self.make_challenge(request.app.state.store, sid, provider, variant)
+            if variant == INTERSTITIAL:
+                provider = INTERSTITIAL
+            hardened = (await request.app.state.registry.resolved_flags()).get(
+                "pow_interstitial_hardened", False
+            )
+            public = await self.make_challenge(
+                request.app.state.store, sid, provider, variant, hardened=hardened
+            )
             return JSONResponse(public, headers={"Cache-Control": "no-store"})
+
+        @r.get("/interstitial")
+        async def interstitial_page(request: Request, return_to: str = "") -> Response:
+            """The interstitial page on demand; ``return_to`` is kept only if same-origin."""
+            sid = request.cookies.get("bm_sz", "")
+            if not sid:
+                return JSONResponse({"error": "no_session"}, status_code=400)
+            hardened = (await request.app.state.registry.resolved_flags()).get(
+                "pow_interstitial_hardened", False
+            )
+            public = await self.make_challenge(
+                request.app.state.store,
+                sid,
+                INTERSTITIAL,
+                INTERSTITIAL,
+                hardened=hardened,
+                return_to=return_to,
+            )
+            page = render_interstitial(public["token"], public["expression"], public["result_var"])
+            return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+        @r.post("/interstitial/verify")
+        async def interstitial_verify(request: Request) -> Response:
+            return await self._verify(request, INTERSTITIAL)
 
         @r.post("/verify")
         async def verify(request: Request) -> Response:

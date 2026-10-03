@@ -236,16 +236,16 @@ async def test_legacy_routes_keep_working_after_the_wait(
     assert r.status_code == 200 and "~3~" in r.cookies["sec_cpt"]
 
 
-async def test_simple_variant_is_lab_only_and_only_warns(
+async def test_simple_variant_is_free_form_and_only_warns(
     http: httpx.AsyncClient, mod: ProofOfWork, make_ctx: Callable[..., RequestContext]
 ) -> None:
     ch = await issue(http, variant="simple")
-    assert ch["lab_only"] is True and "no known Akamai analogue" in ch["note"]
+    assert ch["lab_only"] is True and "interstitial" in ch["note"]
     r = await http.post(
         "/akam/proof_of_work/verify",
         json={"challenge_id": ch["challenge_id"], "answer": eval_expression(ch["expression"])},
     )
-    assert r.json()["ok"] and "sec_cpt" not in r.cookies  # no real sec_cpt for the lab device
+    assert r.json()["ok"] and "sec_cpt" not in r.cookies  # no real sec_cpt for this variant
     sig = await mod.evaluate(ctx_for(http, make_ctx))
     assert sig.verdict == Verdict.WARN and sig.score < 50
     assert mod.confidence.value == "medium"
@@ -326,3 +326,337 @@ async def test_default_duration_comes_from_policy_not_constructor() -> None:
         await c.put("/api/policy", json={"params": {"chlg_duration": 7}})
         j = (await c.get("/protected/all", headers={"x-score": "40"})).json()
         assert j["chlg_duration"] == 7
+
+
+# -- cookieless arithmetic interstitial (bm-verify) -----------------------------------------
+
+BASIC_RE = re.compile(r'var\s+j\s*=\s*i\s*\+\s*Number\("(\d+)"\s*\+\s*"(\d+)"\)')
+USER_RE = BASIC_RE  # the pattern the user quoted
+
+
+def script_of(page: str) -> str:
+    m = re.search(r"<script>(.*?)</script>", page, re.S)
+    assert m
+    return m.group(1)
+
+
+def token_of(page: str) -> str:
+    return re.search(r'"bm-verify":"(\w+)"', page).group(1)  # type: ignore[union-attr]
+
+
+def basic_answer(page: str) -> int:
+    """What a fixed-regex solver does: no JavaScript is run."""
+    i = int(re.search(r"var\s+i\s*=\s*(\d+)", page).group(1))  # type: ignore[union-attr]
+    a, b = BASIC_RE.search(page).groups()  # type: ignore[union-attr]
+    return i + int(a + b)
+
+
+def robust_answer(js: str) -> int:
+    """A parser-based solver: reads the declarations, whatever the shape."""
+    decls = re.findall(r"(?:var|let)\s+([\w$]+)\s*=\s*([^;]+);", js)
+    values: dict[str, int] = {}
+    for name, rhs in decls:
+        rhs = rhs.strip()
+        if re.fullmatch(r"0x[0-9a-fA-F]+|\d+", rhs):
+            values[name] = int(rhs, 16 if rhs.lower().startswith("0x") else 10)
+    for _name, rhs in decls:
+        strings = re.findall(r"""(['"])(\d+)\1""", rhs)
+        if strings:
+            ref = next(
+                v
+                for k, v in values.items()
+                if re.search(rf"(?<![\w$]){re.escape(k)}(?![\w$])", rhs)
+            )
+            return ref + int("".join(s for _, s in strings))
+    raise AssertionError("no arithmetic found")
+
+
+async def get_interstitial(http: httpx.AsyncClient, **params: str) -> str:
+    r = await http.get("/akam/proof_of_work/interstitial", params=params)
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    return r.text
+
+
+async def test_interstitial_page_shape_and_correct_answer(
+    http: httpx.AsyncClient, mod: ProofOfWork, make_ctx: Callable[..., RequestContext]
+) -> None:
+    page = await get_interstitial(http)
+    assert "var i = " in page and BASIC_RE.search(page)
+    assert "/_sec/verify?provider=interstitial" in page and "location.reload()" in page
+    r = await http.post(
+        "/_sec/verify?provider=interstitial",
+        json={"bm-verify": token_of(page), "pow": basic_answer(page)},
+    )
+    assert r.status_code == 200 and r.json()["ok"] and r.json()["provider"] == "interstitial"
+    assert {"_abck", "ak_bmsc"} <= set(r.cookies)  # lab cookie issuance (bm_sz already sent)
+    sig = await mod.evaluate(ctx_for(http, make_ctx))
+    # a regex solves the basic page without JavaScript: WARN, never PASS
+    assert sig.verdict == Verdict.WARN and sig.score == 30 and "regex" in sig.reason
+    assert await mod.challenge_satisfied(ctx_for(http, make_ctx), "interstitial")
+    assert not await mod.challenge_satisfied(ctx_for(http, make_ctx), "crypto")
+
+
+async def test_interstitial_failures_replay_session_expiry(
+    http: httpx.AsyncClient, clock: Clock
+) -> None:
+    page = await get_interstitial(http)
+    ans, tok = basic_answer(page), token_of(page)
+    wrong = await http.post("/_sec/verify", json={"bm-verify": tok, "pow": ans + 1})
+    assert wrong.status_code == 403 and wrong.json()["error"] == "wrong_answer"
+    again = await http.post("/_sec/verify", json={"bm-verify": tok, "pow": ans})
+    assert again.json()["error"] == "unknown_or_replayed"  # consumed by the failed attempt
+
+    page = await get_interstitial(http)
+    ok = await http.post(
+        "/akam/proof_of_work/interstitial/verify",  # lab alias
+        json={"bm-verify": token_of(page), "pow": basic_answer(page)},
+    )
+    assert ok.status_code == 200
+    replay = await http.post(
+        "/akam/proof_of_work/interstitial/verify",
+        json={"bm-verify": token_of(page), "pow": basic_answer(page)},
+    )
+    assert replay.json()["error"] == "unknown_or_replayed"
+
+    page = await get_interstitial(http)
+    clock.t += 61
+    exp = await http.post(
+        "/_sec/verify?provider=interstitial",
+        json={"bm-verify": token_of(page), "pow": basic_answer(page)},
+    )
+    assert exp.json()["error"] == "expired"
+
+    page = await get_interstitial(http)
+    http.cookies.set("bm_sz", "b" * 32 + "~00000000")
+    other = await http.post(
+        "/_sec/verify", json={"bm-verify": token_of(page), "pow": basic_answer(page)}
+    )
+    assert other.json()["error"] == "wrong_session"
+    bad = await http.post("/_sec/verify", json={"bm-verify": "x", "pow": "nan"})
+    assert bad.json()["error"] == "unknown_or_replayed"
+    # provider mismatch: an interstitial token cannot be redeemed as crypto
+    http.cookies.set("bm_sz", SID)
+    page = await get_interstitial(http)
+    mism = await http.post(
+        "/_sec/verify?provider=crypto",
+        json={"bm-verify": token_of(page), "pow": basic_answer(page)},
+    )
+    assert mism.json()["error"] == "wrong_provider"
+
+
+async def test_interstitial_precedence_hard_beats_interstitial(
+    http: httpx.AsyncClient, mod: ProofOfWork, clock: Clock, make_ctx: Callable[..., RequestContext]
+) -> None:
+    page = await get_interstitial(http)
+    await http.post(
+        "/_sec/verify?provider=interstitial",
+        json={"bm-verify": token_of(page), "pow": basic_answer(page)},
+    )
+    assert (await mod.evaluate(ctx_for(http, make_ctx))).verdict == Verdict.WARN
+    ch = await issue(http)
+    clock.t += 2
+    cookie = (await verify(http, ch)).cookies["sec_cpt"]
+    sig = await mod.evaluate(ctx_for(http, make_ctx, cookies={"sec_cpt": cookie}))
+    assert sig.verdict == Verdict.PASS  # hard > interstitial > none
+    # a stale interstitial token never downgrades a solved hard challenge
+    page = await get_interstitial(http)
+    await http.post(
+        "/_sec/verify?provider=interstitial",
+        json={"bm-verify": token_of(page), "pow": basic_answer(page)},
+    )
+    sig = await mod.evaluate(ctx_for(http, make_ctx, cookies={"sec_cpt": cookie}))
+    assert sig.verdict == Verdict.PASS
+
+
+def test_safe_location_guard() -> None:
+    from app.modules.proof_of_work import safe_location
+
+    assert safe_location("/protected/all?x=1") == "/protected/all?x=1"
+    for bad in (
+        None,
+        "",
+        "https://evil.example/x",
+        "//evil.example",
+        "/\\evil.example",
+        "evil.example",
+        "javascript:alert(1)",
+        "/ok\r\nSet-Cookie: a=b",
+        "http:/evil",
+    ):
+        assert safe_location(bad) is None
+
+
+async def test_location_only_when_same_origin(http: httpx.AsyncClient) -> None:
+    page = await get_interstitial(http, return_to="/protected/all?x=1")
+    r = await http.post(
+        "/_sec/verify", json={"bm-verify": token_of(page), "pow": basic_answer(page)}
+    )
+    assert r.json()["location"] == "/protected/all?x=1"
+    for evil in ("//evil.example/x", "https://evil.example/", "/\\evil.example"):
+        page = await get_interstitial(http, return_to=evil)
+        r = await http.post(
+            "/_sec/verify", json={"bm-verify": token_of(page), "pow": basic_answer(page)}
+        )
+        assert r.status_code == 200 and "location" not in r.json()
+
+
+async def test_cookieless_gate_serves_the_page_and_solving_clears_it(
+    http: httpx.AsyncClient,
+) -> None:
+    assert "Protected Storefront" in (await http.get("/", headers={"accept": "text/html"})).text
+    await http.put("/api/flags/pow_cookieless_gate", json={"value": True})
+    app = http.app  # type: ignore[attr-defined]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/", headers={"accept": "text/html"})
+        assert (
+            r.status_code == 200
+            and '"bm-verify"' in r.text
+            and "Protected Storefront" not in r.text
+        )
+        assert {"bm_sz", "_abck", "ak_bmsc"} <= set(c.cookies)  # issued with the interstitial
+        # JSON/XHR callers and non-navigations are not gated
+        assert "Protected Storefront" not in r.text
+        v = await c.post(
+            "/_sec/verify?provider=interstitial",
+            json={"bm-verify": token_of(r.text), "pow": basic_answer(r.text)},
+        )
+        assert v.json()["ok"] and v.json()["location"] == "/"
+        after = await c.get("/", headers={"accept": "text/html"})  # the page's reload
+        assert "Protected Storefront" in after.text
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        assert "Protected Storefront" in (await c.get("/")).text  # no text/html accept: not gated
+
+
+async def test_challenge_action_with_interstitial_provider(http: httpx.AsyncClient) -> None:
+    await http.put("/api/policy", json={"params": {"challenge_provider": "interstitial"}})
+    j = (await http.get("/protected/all", headers={"x-score": "40"})).json()
+    assert j["provider"] == "interstitial" and j["report"]["challenge_provider"] == "interstitial"
+    assert j["token"] == j["bm-verify"] and BASIC_RE.search(j["expression"])
+    page = await http.get("/protected/all", headers={"x-score": "40", "accept": "text/html"})
+    assert page.status_code == 200 and '"bm-verify"' in page.text
+    r = await http.post(
+        "/_sec/verify?provider=interstitial",
+        json={"bm-verify": token_of(page.text), "pow": basic_answer(page.text)},
+    )
+    assert r.json()["ok"]
+    after = await http.get("/protected/all", headers={"x-score": "40"})
+    assert after.json()["report"]["action"] == "monitor"  # satisfied for the interstitial provider
+
+
+async def test_hardened_breaks_fixed_regex_but_not_a_parser(http: httpx.AsyncClient) -> None:
+    await http.put("/api/flags/pow_interstitial_hardened", json={"value": True})
+    shapes = set()
+    for _ in range(40):
+        page = await get_interstitial(http)
+        assert USER_RE.search(page) is None  # the user's pattern no longer matches
+        js = script_of(page)
+        shapes.add(re.sub(r"\d+", "N", re.split(r"fetch\(", js)[0]))
+        r = await http.post(
+            "/_sec/verify?provider=interstitial",
+            json={"bm-verify": token_of(page), "pow": robust_answer(js.split("fetch(")[0])},
+        )
+        assert r.status_code == 200, (page, r.text)  # a parser-based solver still succeeds
+    assert len(shapes) > 15  # genuinely varied shapes
+    await http.put("/api/flags/pow_interstitial_hardened", json={"value": False})
+    assert USER_RE.search(await get_interstitial(http))  # and the basic page matches again
+
+
+async def test_hardened_stale_regex_answer_is_wrong(http: httpx.AsyncClient) -> None:
+    """A solver that falls back to the basic shape's regex on hardened output has no match,
+    and answering with a stale/basic value is rejected."""
+    basic = await get_interstitial(http)
+    stale = basic_answer(basic)
+    await http.put("/api/flags/pow_interstitial_hardened", json={"value": True})
+    page = await get_interstitial(http)
+    assert BASIC_RE.search(page) is None
+    r = await http.post("/_sec/verify", json={"bm-verify": token_of(page), "pow": stale})
+    assert r.status_code == 403 and r.json()["error"] == "wrong_answer"
+
+
+async def test_legacy_challenge_route_serves_interstitial_json(http: httpx.AsyncClient) -> None:
+    j = (await http.get("/akam/proof_of_work/challenge?variant=interstitial")).json()
+    assert (
+        j["provider"] == "interstitial" and j["bm-verify"] == j["token"] and j["hardened"] is False
+    )
+    no_sid = httpx.AsyncClient(transport=httpx.ASGITransport(app=http.app), base_url="http://t")  # type: ignore[attr-defined]
+    async with no_sid:
+        assert (await no_sid.get("/akam/proof_of_work/interstitial")).status_code == 400
+
+
+def run_in_node(js: str) -> dict | None:
+    """Run the served script under node:20-alpine with fetch stubbed; None if unavailable."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("docker"):
+        return None
+    driver = (
+        "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{"
+        "let cap=null;const fetchStub=(u,o)=>{cap=JSON.parse(o.body);return new Promise(()=>{})};"
+        "new Function('fetch','location','document',s)(fetchStub,{reload(){}},{});"
+        "console.log(JSON.stringify(cap))})"
+    )
+    try:
+        out = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--network",
+                "none",
+                "node:20-alpine",
+                "node",
+                "-e",
+                driver,
+            ],
+            input=js,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    return json.loads(out.stdout.strip().splitlines()[-1])  # type: ignore[no-any-return]
+
+
+@pytest.mark.parametrize("hardened", [False, True])
+async def test_node_executes_served_script_to_the_servers_answer(
+    http: httpx.AsyncClient, hardened: bool
+) -> None:
+    if hardened:
+        await http.put("/api/flags/pow_interstitial_hardened", json={"value": True})
+    pages = [await get_interstitial(http) for _ in range(6 if hardened else 1)]
+    first = run_in_node(script_of(pages[0]))
+    if first is None:
+        pytest.skip("docker with node:20-alpine is not available")
+    for page in pages:
+        cap = run_in_node(script_of(page))
+        assert cap is not None and cap["bm-verify"] == token_of(page)
+        r = await http.post("/_sec/verify?provider=interstitial", json=cap)
+        assert r.status_code == 200 and r.json()["ok"], (page, cap, r.text)
+
+
+async def test_challenge_satisfied_is_scoped_to_own_providers(
+    mod: ProofOfWork, make_ctx: Callable[..., RequestContext], memory_store: MemoryStore
+) -> None:
+    """A valid crypto sec_cpt must not waive another module's challenge (e.g. interactive)."""
+    cookie = "f" * 32 + "~3~1000"
+    await memory_store.set(f"pow:{SID}", json.dumps({"cookie": cookie, "solved_at": 1000.0}))
+    ctx = make_ctx(session_id=SID, cookies={"sec_cpt": cookie})
+    assert await mod.challenge_satisfied(ctx, "crypto")
+    assert await mod.challenge_satisfied(ctx, "interstitial")  # hard PoW is stronger
+    assert await mod.challenge_satisfied(ctx, None)
+    assert not await mod.challenge_satisfied(ctx, "interactive")
+
+
+def test_interstitial_script_does_not_reload_the_on_demand_route() -> None:
+    """Reloading /akam/proof_of_work/interstitial would mint a fresh page forever."""
+    from app.modules.proof_of_work import INTERSTITIAL_PAGE_PATH, render_interstitial
+
+    page = render_interstitial("TOK", 'var i = 1; var j = i + Number("2" + "3");', "j")
+    assert "location.replace(l)" in page  # same-origin location is followed first
+    assert f'location.pathname==="{INTERSTITIAL_PAGE_PATH}"' in page
+    assert 'location.replace("/")' in page

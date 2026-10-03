@@ -227,7 +227,7 @@ class Engine:
         safeguard = False
         if action == Action.CHALLENGE:
             provider = policy.params.challenge_provider
-            if await self._challenge_satisfied(ctx):
+            if await self._challenge_satisfied(ctx, provider):
                 action = Action.MONITOR  # already proved itself inside the challenge interval
                 provider = ""
             else:
@@ -280,12 +280,12 @@ class Engine:
         await self._notify(ctx, report)
         return report
 
-    async def _challenge_satisfied(self, ctx: RequestContext) -> bool:
+    async def _challenge_satisfied(self, ctx: RequestContext, provider: str) -> bool:
         for m in await self.registry.enabled_modules():
             if not m.challenge_providers:
                 continue
             try:
-                if await m.challenge_satisfied(ctx):
+                if await m.challenge_satisfied(ctx, provider):
                     return True
             except Exception:
                 log.exception("challenge_satisfied failed for %s", m.slug)

@@ -47,7 +47,7 @@ from .store import window_add, window_count
 HUMAN = "human"
 SEGMENTS = ("cautious", "strict", "aggressive")
 TELEMETRY_TYPES = ("standard", "inline", "native")
-CHALLENGE_PROVIDERS = ("crypto", "behavioral", "adaptive", "interactive")
+CHALLENGE_PROVIDERS = ("crypto", "behavioral", "adaptive", "interactive", "interstitial")
 
 POLICY_KEY = "policy:doc"
 
@@ -134,9 +134,7 @@ class PolicyParams(BaseModel):
 
 
 class Policy(BaseModel):
-    bands: Bands = Field(
-        default_factory=lambda: {k: dict(v) for k, v in DEFAULT_BANDS.items()}
-    )
+    bands: Bands = Field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_BANDS.items()})
     actions: dict[str, dict[str, Action]] = Field(
         default_factory=lambda: {k: dict(v) for k, v in DEFAULT_ACTIONS.items()}
     )
