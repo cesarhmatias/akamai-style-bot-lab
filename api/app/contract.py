@@ -43,6 +43,44 @@ class Verdict(StrEnum):
     SKIP = "skip"  # not applicable to this request (contributes 0)
 
 
+class Confidence(StrEnum):
+    """How well a simulated behaviour is backed by public sources (audit report §3.1).
+
+    HIGH   -> implemented as real lab behaviour.
+    MEDIUM -> implemented, documented as an approximation.
+    LOW    -> vendor-sourced / unverified; only active behind a feature flag (default off).
+    LAB    -> lab-only teaching device with no known Akamai analogue.
+    """
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    LAB = "lab"
+
+
+class EndpointClass(StrEnum):
+    """What kind of resource a scored request targets (drives thresholds and module scope)."""
+
+    PAGE = "page"  # HTML navigations, e.g. GET /
+    PROTECTED = "protected"  # GET /protected/<slug> demo resources
+    TRANSACTIONAL = "transactional"  # POST /api/login, /api/checkout (inline telemetry)
+    MOBILE = "mobile"  # /mobile/api/* (native-app telemetry)
+
+
+class Action(StrEnum):
+    """Response actions a Bot Score segment can map to (audit §2.1)."""
+
+    MONITOR = "monitor"
+    ALLOW = "allow"
+    DENY = "deny"
+    DELAY = "delay"
+    SLOW = "slow"
+    TARPIT = "tarpit"
+    SERVE_ALTERNATE = "serve_alternate"
+    CHALLENGE = "challenge"
+    SAFEGUARD = "safeguard"
+
+
 class Signal(BaseModel):
     """Output of a single module for a single request."""
 
@@ -51,6 +89,21 @@ class Signal(BaseModel):
     score: int = Field(ge=0, le=100, description="Bot-likelihood contribution 0-100")
     reason: str
     details: dict[str, Any] = Field(default_factory=dict)
+    confidence: Confidence | None = None  # filled in by the engine from the module
+
+
+class FlagSpec(BaseModel):
+    """A feature flag a module declares; gates LOW-confidence behaviour (default off).
+
+    Resolution order: store key ``flag:{name}`` ("1"/"0", set from the dashboard via
+    ``PUT /api/flags/{name}``), then env ``LAB_FLAG_<NAME upper>``, then ``default``.
+    """
+
+    name: str  # snake_case, globally unique, e.g. "abck_tilde0_mode"
+    description: str
+    confidence: Confidence = Confidence.LOW
+    default: bool = False
+    source: str = ""  # short citation into docs/research/akamai-audit-2026-10.md
 
 
 class ScoreReport(BaseModel):
@@ -69,6 +122,15 @@ class ScoreReport(BaseModel):
     headers: list[tuple[str, str]] = Field(default_factory=list)
     cookies: dict[str, str] = Field(default_factory=dict)
     client_label: str = ""  # value of X-Lab-Client header, used by the comparison panel
+    # --- v2 (audit remediation) -------------------------------------------------------
+    endpoint_class: EndpointClass = EndpointClass.PROTECTED
+    telemetry_type: str = "standard"  # "standard" | "inline" | "native" (audit §2.5)
+    segment: str = ""  # Bot Score segment name, e.g. "cautious" | "strict" | "aggressive"
+    action: Action = Action.ALLOW  # what the lab actually did with the request
+    canary: str = ""  # serve_alternate: hidden token planted in the perturbed response
+    reference: str = ""  # deny: Akamai-style "Reference #18.xxxx.ts.xxxx" mapped to this report
+    layers: dict[str, Any] = Field(default_factory=dict)  # cross-layer version agreement (§2.2)
+    origin_headers: dict[str, str] = Field(default_factory=dict)  # verdict headers to origin (§2.9)
 
 
 class SessionStore(Protocol):
@@ -97,8 +159,17 @@ class RequestContext(BaseModel):
     ja4: str = ""
     h2_fingerprint: str = ""
     http_proto: str = "http/1.1"
-    session_id: str = ""  # value of bm_sz cookie (or "" if none yet)
+    session_id: str = ""  # value of bm_sz cookie (issued before evaluation if missing)
     store: Any = None  # SessionStore
+    # --- v2 ------------------------------------------------------------------------------
+    endpoint_class: EndpointClass = EndpointClass.PROTECTED
+    body_sha256: str = ""  # hex sha256 of the raw request body ("" for GET)
+    query: dict[str, str] = Field(default_factory=dict)
+    flags: dict[str, bool] = Field(default_factory=dict)  # resolved feature flags (FlagSpec)
+
+    def flag(self, name: str) -> bool:
+        """Resolved value of a declared feature flag (False if undeclared)."""
+        return self.flags.get(name, False)
 
     def header(self, name: str) -> str | None:
         name = name.lower()
@@ -119,8 +190,21 @@ class DetectionModule(ABC):
     slug: ClassVar[str]  # e.g. "tls_fingerprint"; also the docs/cases/<slug>.md name
     title: ClassVar[str]
     description: ClassVar[str]
-    category: ClassVar[str]  # "passive" | "cookie" | "js" | "behavioral" | "network"
+    category: ClassVar[str]  # "passive" | "cookie" | "js" | "behavioral" | "network" | ...
     default_enabled: ClassVar[bool] = True
+    # v2: confidence tier of the simulated mechanism (audit §3.1); shown in the dashboard.
+    confidence: ClassVar[Confidence] = Confidence.HIGH
+    # v2: endpoint classes this module is evaluated on when running "all enabled modules"
+    # (GET /, /protected/all, transactional and mobile endpoints). /protected/<slug>
+    # always evaluates the named module regardless of this set.
+    applies_to: ClassVar[frozenset[EndpointClass]] = frozenset(
+        {EndpointClass.PAGE, EndpointClass.PROTECTED}
+    )
+    # v2: feature flags this module declares (LOW-confidence behaviour, default off).
+    flags: ClassVar[list[FlagSpec]] = []
+    # v1 (still supported): static script paths relative to /akam/<slug>/, injected into
+    # every HTML page. Prefer page_snippets() for per-session markup.
+    client_scripts: ClassVar[list[str]] = []
     # Protected demo resource for this case: GET /protected/<slug>
     # The engine evaluates ONLY this module (plus nothing else) on that path,
     # and ALL enabled modules on GET /protected/all.
@@ -129,6 +213,18 @@ class DetectionModule(ABC):
     async def evaluate(self, ctx: RequestContext) -> Signal: ...
 
     def router(self) -> Any | None:  # fastapi.APIRouter | None
+        return None
+
+    async def page_snippets(self, ctx: RequestContext) -> list[str]:
+        """v2: raw HTML fragments injected before ``</body>`` of every HTML page the lab
+        serves (landing page, interstitials). Use for per-session script paths and values
+        embedded in markup (e.g. the pixel's global). ``ctx.session_id`` is always set."""
+        return []
+
+    async def handle_dynamic(self, request: Any, ctx: RequestContext) -> Any | None:
+        """v2: claim a request on an otherwise unrouted same-origin path (GET or POST),
+        e.g. a per-session random sensor-script path. Return a Response to claim it,
+        or None to pass. Called in module slug order; first non-None wins."""
         return None
 
     def signal(

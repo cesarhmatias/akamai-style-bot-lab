@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
 import pkgutil
 from collections.abc import Iterable
 
 from . import modules as modules_pkg
-from .contract import DetectionModule, SessionStore
+from .contract import DetectionModule, FlagSpec, SessionStore
 
 
 def discover_modules() -> list[DetectionModule]:
@@ -56,3 +57,34 @@ class Registry:
 
     async def enabled_modules(self) -> list[DetectionModule]:
         return [m for m in self.all() if await self.is_enabled(m.slug)]
+
+    # --- feature flags (v2) ----------------------------------------------------------
+
+    def flag_specs(self) -> dict[str, FlagSpec]:
+        """All flags declared by modules (plus engine-level ones), keyed by name."""
+        specs: dict[str, FlagSpec] = {f.name: f for f in ENGINE_FLAGS}
+        for m in self.all():
+            for f in m.flags:
+                specs[f.name] = f
+        return specs
+
+    async def flag_value(self, spec: FlagSpec) -> bool:
+        raw = await self.store.get(f"flag:{spec.name}")
+        if raw is not None:
+            return raw == "1"
+        env = os.environ.get(f"LAB_FLAG_{spec.name.upper()}")
+        if env is not None:
+            return env.strip().lower() in {"1", "true", "yes", "on"}
+        return spec.default
+
+    async def resolved_flags(self) -> dict[str, bool]:
+        return {name: await self.flag_value(spec) for name, spec in self.flag_specs().items()}
+
+    async def set_flag(self, name: str, value: bool) -> None:
+        if name not in self.flag_specs():
+            raise KeyError(name)
+        await self.store.set(f"flag:{name}", "1" if value else "0")
+
+
+# Engine-level flags (not owned by a module) are declared here.
+ENGINE_FLAGS: list[FlagSpec] = []

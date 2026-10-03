@@ -8,6 +8,7 @@ when ``score >= BLOCK_THRESHOLD`` or any signal verdict is BLOCK.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from collections import deque
@@ -25,6 +26,7 @@ from .contract import (
     H_JA4,
     H_PROTO,
     DetectionModule,
+    EndpointClass,
     RequestContext,
     ScoreReport,
     SessionStore,
@@ -46,7 +48,15 @@ def aggregate(signals: list[Signal]) -> tuple[int, bool]:
     return score, blocked
 
 
-def build_context(request: Request, store: SessionStore) -> RequestContext:
+def build_context(
+    request: Request,
+    store: SessionStore,
+    *,
+    session_id: str | None = None,
+    endpoint_class: EndpointClass = EndpointClass.PROTECTED,
+    body: bytes = b"",
+    flags: dict[str, bool] | None = None,
+) -> RequestContext:
     scope_headers = [
         (k.decode("latin-1"), v.decode("latin-1")) for k, v in request.scope["headers"]
     ]
@@ -70,8 +80,12 @@ def build_context(request: Request, store: SessionStore) -> RequestContext:
         ja4=hmap.get(H_JA4, ""),
         h2_fingerprint=hmap.get(H_H2, ""),
         http_proto=hmap.get(H_PROTO) or "http/1.1",
-        session_id=request.cookies.get("bm_sz", ""),
+        session_id=session_id if session_id is not None else request.cookies.get("bm_sz", ""),
         store=store,
+        endpoint_class=endpoint_class,
+        body_sha256=hashlib.sha256(body).hexdigest() if body else "",
+        query=dict(request.query_params),
+        flags=flags or {},
     )
 
 
@@ -84,7 +98,10 @@ class Engine:
 
     async def _run(self, module: DetectionModule, ctx: RequestContext) -> Signal:
         try:
-            return await module.evaluate(ctx)
+            sig = await module.evaluate(ctx)
+            if sig.confidence is None:
+                sig.confidence = module.confidence
+            return sig
         except Exception as exc:
             log.exception("module %s failed", module.slug)
             return Signal(
@@ -103,7 +120,11 @@ class Engine:
             m = self.registry.get(slug)
             selected = [m] if m and await self.registry.is_enabled(slug) else []
         else:
-            selected = await self.registry.enabled_modules()
+            selected = [
+                m
+                for m in await self.registry.enabled_modules()
+                if ctx.endpoint_class in m.applies_to
+            ]
         signals = list(await asyncio.gather(*(self._run(m, ctx) for m in selected)))
         score, blocked = aggregate(signals)
         report = ScoreReport(
@@ -126,6 +147,7 @@ class Engine:
             headers=ctx.headers,
             cookies=ctx.cookies,
             client_label=client_label,
+            endpoint_class=ctx.endpoint_class,
         )
         self.record(report)
         return report
@@ -138,6 +160,12 @@ class Engine:
     def recent(self, limit: int = 100) -> list[ScoreReport]:
         items = list(self.reports)[-limit:] if limit > 0 else []
         return list(reversed(items))  # newest first
+
+    def get(self, report_id: str) -> ScoreReport | None:
+        for rep in reversed(self.reports):
+            if rep.id == report_id:
+                return rep
+        return None
 
     def last_signal(self, slug: str) -> Signal | None:
         for rep in reversed(self.reports):
