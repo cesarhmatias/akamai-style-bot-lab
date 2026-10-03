@@ -40,7 +40,7 @@ from is [research/akamai-audit-2026-10.md](research/akamai-audit-2026-10.md).
      `GET /api/canary/{token}`, `GET /api/flags`, `PUT /api/flags/{name}`, `GET /api/feed` (SSE, event `report`),
      `POST /api/reset`, `GET /healthz`.
 5. **Pre-request gate** (`gate()`, page and protected routes only): each enabled module's `pre_request()` may short-circuit before
-   any scoring, for example the waiting room (`visitor_prioritization`) or the cookieless interstitial gate. A short-circuited
+   any scoring, for example the waiting room (`visitor_prioritization`). A short-circuited
    HTML response still receives the sensor and pixel snippets and the lab's cookies.
 6. **Scoring** (`Engine.evaluate`): the selected modules run concurrently (`asyncio.gather`), either the one named by
    `/protected/<slug>` or every enabled module whose `applies_to` contains the request's endpoint class. An exception in a module

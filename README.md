@@ -40,7 +40,7 @@ flowchart LR
     subgraph lab[docker compose]
       E[edge - Go<br/>TLS + HTTP/2 fingerprinting<br/>JA3, JA4, H2, header order] -->|HTTP + x-ja4, x-h2-fingerprint, ...| G
       subgraph A[api - FastAPI]
-        G[pre_request gates<br/>waiting room, cookieless gate] --> M[detection modules x22<br/>signals 0-100]
+        G[pre_request gates<br/>e.g. waiting room] --> M[detection modules x22<br/>signals 0-100]
         M --> S[Bot Score<br/>max + 0.25 x rest]
         S --> SEG[segment per telemetry type<br/>cautious / strict / aggressive]
         SEG --> P[response policy<br/>endpoint class x segment]
