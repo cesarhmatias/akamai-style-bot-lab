@@ -1,48 +1,76 @@
-# Case 2: `h2_fingerprint` (HTTP/2 connection fingerprint)
+# `h2_fingerprint`: HTTP/2 connection fingerprint
 
-Category: passive. Module: `api/app/modules/h2_fingerprint.py`. Protected URL: `/protected/h2_fingerprint`.
+Category: passive · Module: `api/app/modules/h2_fingerprint.py` · Protected URL: `/protected/h2_fingerprint`
+· Default: on · Module tier: **HIGH**
 
-## Mechanism
-HTTP/2 stacks differ in connection-level choices that no header exposes: the SETTINGS frame (ids, values,
-order), the initial connection WINDOW_UPDATE, PRIORITY frames and the pseudo-header order
-(`:method :authority :scheme :path`). Chrome sends `:method, :authority, :scheme, :path` (`m,a,s,p`);
-Firefox sends `m,p,a,s`.
+## What it is
+
+The first frames of an HTTP/2 connection are fixed per stack: the SETTINGS frame (ids and values, in order), the
+connection-level WINDOW_UPDATE, any PRIORITY frames, and the order of the pseudo-headers. Together they identify the
+browser or library independently of anything written in headers.
 
 ## How real Akamai uses it
-Akamai published the technique ("Passive Fingerprinting of HTTP/2 Clients", Black Hat EU 2017) and the
-fingerprint string format `SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_ORDER`, which this lab reuses.
-Browsers must speak h2 over TLS, so an h1 client with a browser UA is already suspicious.
 
-## How THIS server detects it
-The edge sniffs the preface, SETTINGS, WINDOW_UPDATE, PRIORITY and first HEADERS frames and injects
-`x-h2-fingerprint` (empty for HTTP/1.1). Chrome's value is
-`1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p`. The module parses it and compares per component with
-the profile of the browser the UA claims (chrome, firefox, safari; unknown UAs are compared to Chrome):
+Akamai published this technique itself: Shuster, "Passive Fingerprinting of HTTP/2 Clients" (2017; report §1.2
+case 2, [P]). The literal string is `S[;]|WU|P[,]|PS[,]`:
 
-| component | points when different |
-|---|---|
-| SETTINGS ids / order | 30 |
-| SETTINGS values | 25 |
-| WINDOW_UPDATE | 20 |
-| pseudo-header order | 25 |
+- **S**: SETTINGS `id:value` pairs in order of appearance, joined by `;`.
+- **WU**: the WINDOW_UPDATE increment, `00` when the frame is absent.
+- **P**: one `stream:exclusive:dep:weight` tuple per PRIORITY frame, joined by `,`, or `0` (weights print as the wire
+  byte plus one).
+- **PS**: pseudo-header letters `m`, `a`, `s`, `p`.
 
-Score = sum (cap 100), `>= 50` fail, otherwise warn, `0` pass. Special cases: HTTP/1.1 with browser UA is
-fail 80, HTTP/1.1 with any other UA is fail 70, malformed fingerprint is fail 80. `details.breakdown` shows
-the per-component points.
+The paper's Firefox 53 example is `1:65536;4:131072;5:16384|12517377|3:0:0:201,5:0:0:101,7:0:0:1,9:0:7:1,11:0:3:1|m,p,a,s`.
+The bracketed `S[...]|WU[...]` form is notation, not the literal string. Which profiles Akamai scores today and with
+what weights is not public.
 
-## How a client passes here
-Speak h2 with a browser-identical SETTINGS/WINDOW_UPDATE/pseudo-order: Playwright, or `curl_cffi`
-impersonation. A plain `requests` client cannot (no h2 at all).
+## Confidence
 
-## Observed (real run)
-| client | proto | fingerprint | verdict |
+| Sub-feature | Tier | Basis (report §3.1) |
+|---|---|---|
+| String format and semantics (S, WU `00`, P, PS) | HIGH | Akamai's own paper |
+| Current Chrome and Firefox values | HIGH | maintainer captures (2025), the lab's own capture |
+| Safari 18 values (`safari`, `safari-ios`) | MEDIUM (approximation) | two 2025 captures; Safari 26 may differ |
+| Optional HEADERS-frame priority echo | not scored | reported in `details` only |
+
+## How the lab simulates it
+
+The edge emits `x-h2-fingerprint` in the paper's format (an absent WINDOW_UPDATE is written `00`; the module also
+accepts `0` and `-`). `x-h2-fingerprint-labeled` (`S[..]|WU[..]|...`) is a lab convenience and is not read.
+
+The string is parsed and compared per component with the profile of the browser the UA claims (non-browser UAs are
+compared with Chrome):
+
+| Profile | SETTINGS | WINDOW_UPDATE | Pseudo order |
 |---|---|---|---|
-| naive | http/1.1 | (empty) | fail 70, "HTTP/1.1 client, not a browser stack" |
-| curl_cffi | h2 | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` | pass 0, "H2 matches chrome profile" |
-| Playwright | h2 | same | pass 0, "H2 matches chrome profile" |
+| chrome | `1:65536;2:0;4:6291456;6:262144` | 15663105 | `m,a,s,p` |
+| firefox | `1:65536;2:0;4:131072;5:16384` | 12517377 | `m,p,a,s` |
+| safari (macOS) | `2:0;3:100;4:2097152;9:1` | 10420225 | `m,s,a,p` |
+| safari-ios | `2:0;3:100;4:2097152;8:1;9:1` | 10420225 | `m,s,a,p` |
 
-## Caveats
-- The profiles are single, hard-coded values (the Chrome one observed here); real deployments track many
-  versions and platforms.
-- Any h2 library that copies the four values passes; this checks a mimic, not authenticity.
-- Fingerprints are per connection; the edge reads them once per connection.
+A Safari-claiming UA is scored against both Safari profiles and takes the best match. Deviation points: setting ids
+or their order 30, setting values 25, WINDOW_UPDATE 20, pseudo-header order 25 (sum capped at 100). Score 0 passes,
+below 50 warns, 50 and above fails ("H2 deviates from `<profile>` profile"). Other results: HTTP/1.1 with a
+Chrome/Firefox/Safari UA fails 80; HTTP/1.1 with another UA fails 70; a malformed string fails 80. The first HEADERS
+priority (`x-h2-headers-priority`) is echoed in `details["headers_priority"]` and never scored.
+
+## How a scraper passes it
+
+Use an HTTP/2 stack that mimics the claimed browser: `curl_cffi` with an `impersonate` profile, or a real browser.
+Changing headers does nothing; `requests`/`httpx` in HTTP/1.1 mode fail immediately.
+
+## Observed results
+
+| Client | Cell | Verdict and reason |
+|---|---|---|
+| naive (`requests`) | fail | fail 70, "HTTP/1.1 client, not a browser stack" |
+| curl_cffi `chrome131` | pass | pass 0, "H2 matches chrome profile", `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` |
+| Playwright | pass | pass 0, "H2 matches chrome profile", same string |
+
+## Limits and caveats
+
+- Profiles are 2025 captures (Chrome 136-154 share one string, Firefox 138, Safari 18.x). Firefox no longer sends the
+  PRIORITY tree from the 2017 example. Safari 26 is unverified ([KNOWN_GAPS](../KNOWN_GAPS.md) item 10).
+- The edge fingerprints one connection and reuses its header order for later streams.
+- HTTP/3 SETTINGS and QUIC parameters are not modelled; the audit found no evidence Akamai scores them (see
+  KNOWN_GAPS, deferred features).
