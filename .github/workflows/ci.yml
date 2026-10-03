@@ -102,10 +102,17 @@ jobs:
       - name: Install Chromium system deps only (cache hit)
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: python -m playwright install-deps chromium
+      # The patchright client drives the runner's preinstalled Google Chrome (channel="chrome"),
+      # headed, so it needs a virtual display. Its JA4 follows that Chrome; the lab's
+      # KNOWN_CHROME_JA4 table has to cover it or tls_fingerprint drifts to warn.
+      - name: Virtual display and Google Chrome for the patchright client
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb
+          google-chrome --version
       - name: Start the lab (waits for healthchecks)
         run: docker compose up -d --build --wait --wait-timeout 300
       - name: Run client matrix (fails on drift from clients/expected_matrix.json)
-        run: python -m clients.run_matrix
+        run: xvfb-run -a python -m clients.run_matrix
       # Only the "## Matrix" section is compared. The rest of RESULTS.md embeds the observed JA4 of
       # every client (it depends on the Chromium build and on the runner's OpenSSL) and the signal
       # reasons, so a byte diff of the whole file would fail for reasons unrelated to the matrix.

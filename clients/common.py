@@ -26,7 +26,7 @@ REPORT_ID_HEADER = "x-lab-report-id"
 USERNAME = "alice@example.com"
 MOBILE_PATH = "/mobile/api/profile"
 
-CLIENTS: list[str] = ["naive", "curl_cffi", "playwright"]
+CLIENTS: list[str] = ["naive", "curl_cffi", "playwright", "patchright"]
 
 
 @dataclass(frozen=True)

@@ -38,6 +38,7 @@ MODULES = {
     "naive": "clients.naive_requests",
     "curl_cffi": "clients.curl_cffi_client",
     "playwright": "clients.playwright_client",
+    "patchright": "clients.patchright_client",
 }
 MARK = {"pass": "✅", "warn": "⚠️", "fail": "❌"}
 
