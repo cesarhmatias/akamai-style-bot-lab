@@ -90,3 +90,48 @@ A module that needs JS in the browser declares an OPTIONAL class attribute
 `client_scripts: ClassVar[list[str]] = []` — paths relative to `/akam/<slug>/` (e.g.
 `["sensor.js"]` -> `/akam/<slug>/sensor.js`). The core landing page `/` and the HTML 403
 interstitial include one `<script src>` per entry, for every registered module.
+
+## v2 — audit remediation (2026-10)
+
+Spec: `docs/research/akamai-audit-2026-10.md`. Types in `api/app/contract.py`.
+
+### Confidence gating (governs how every change ships)
+| Tier | Source in report §3.1 | How it ships |
+|---|---|---|
+| `high` | High | Real lab behaviour, on by default |
+| `medium` | Medium | Implemented; docs label it an approximation and cite the tier |
+| `low` | Low (vendor-only) | Behind a `FlagSpec` (default **off**); docs say "unverified, vendor-sourced" |
+| `lab` | — | Lab-only teaching device with no known Akamai analogue; say so |
+
+Never copy proprietary Akamai script code, keys or real encodings. Artifact *shapes*
+(cookie names, path formats, field layout) are fine; encodings are lab-defined.
+
+### Hooks available to modules
+- `confidence: ClassVar[Confidence]` — tier of the module as a whole.
+- `flags: ClassVar[list[FlagSpec]]` — declared flags; read with `ctx.flag("name")`.
+  Resolution: store `flag:{name}` → env `LAB_FLAG_<NAME>` → default. `GET/PUT /api/flags[/{name}]`.
+- `applies_to: ClassVar[frozenset[EndpointClass]]` — default `{page, protected}`. Classes:
+  `page` (`GET /`), `protected` (`/protected/*`), `transactional` (`POST /api/login`,
+  `POST /api/checkout`), `mobile` (`/mobile/api/*`). `/protected/<slug>` always runs that module.
+- `async page_snippets(ctx) -> list[str]` — HTML injected into every lab HTML page (enabled modules only).
+- `async handle_dynamic(request, ctx) -> Response | None` — claim an unrouted same-origin
+  GET/POST path (catch-all route, registered last in `main.py`).
+- `ctx.session_id` is always set (bm_sz minted before evaluation); `ctx.body_sha256`,
+  `ctx.query`, `ctx.endpoint_class`, `ctx.flags`.
+- Every scored response has `X-Lab-Report-Id`; `GET /api/requests/{id}` returns the report.
+  The harness judges pass/fail from the report's signal for the case, NOT from the HTTP
+  status (non-block actions such as `serve_alternate` return 200).
+
+### ScoreReport v2 fields
+`endpoint_class`, `telemetry_type` (standard|inline|native), `segment`, `action`
+(`Action` enum), `canary`, `reference`, `layers` (cross-layer version agreement),
+`origin_headers` (Akamai-Bot / Akamai-User-Risk style verdict headers).
+
+### File ownership during the remediation fan-out
+| Owner | Files |
+|---|---|
+| passive agent | `edge/**`, modules `tls_fingerprint`, `h2_fingerprint`, `header_order`, `ip_reputation`, new passive modules (`version_consistency`, `known_bots`, `botnet_cluster`, `tcp_fingerprint`) |
+| client-side agent | `api/app/session.py`, `api/app/static/**`, modules `abck_cookie`, `sensor_data`, `pixel_challenge`, `behavioral`, new `js_integrity`, `inline_telemetry`, `session_validation`, `native_app` |
+| response agent | `api/app/contract.py`, `engine.py`, `main.py`, `registry.py`, `store.py`, modules `proof_of_work`, `sbsd_challenge`, new `account_protector`, `visitor_prioritization`, `avf_stepup`, `interactive_challenge`; Bot Score segments, actions, deny pages, origin headers |
+Tests: `api/tests/test_<slug>.py` per module; don't edit `conftest.py` (add helpers in your
+own test files). Commit with `git commit -m ... -- <paths>` so you only commit your files.
