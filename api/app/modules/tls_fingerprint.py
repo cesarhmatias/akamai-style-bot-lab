@@ -183,6 +183,9 @@ class TlsEra:
     max_major: int | None = None
     evidence: list[str] = field(default_factory=list)
     confidence: dict[str, str] = field(default_factory=dict)  # marker -> "high" | "medium"
+    # (bound, evidence, tier) per marker, so callers can attribute a violated bound precisely.
+    lows: list[tuple[int, str, str]] = field(default_factory=list)
+    highs: list[tuple[int, str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -236,11 +239,13 @@ def chrome_tls_era(view: TlsView, *, chrome_shaped: bool) -> TlsEra:
 
     def lo(v: int, why: str, tier: str) -> None:
         era.min_major = max(era.min_major or 0, v)
+        era.lows.append((v, why, tier))
         era.evidence.append(why)
         era.confidence[why] = tier
 
     def hi(v: int, why: str, tier: str) -> None:
         era.max_major = min(era.max_major or 999, v)
+        era.highs.append((v, why, tier))
         era.evidence.append(why)
         era.confidence[why] = tier
 
