@@ -296,7 +296,7 @@ func TestHeaderNames(t *testing.T) {
 	}
 }
 
-// Chrome 150+ sends a random GREASE codepoint first in signature_algorithms. JA4 ignores GREASE,
+// Chrome 152+ sends a random GREASE codepoint first in signature_algorithms. JA4 ignores GREASE,
 // so two handshakes that differ only in that value must share one fingerprint.
 func TestJA4IgnoresGreaseSignatureAlgorithms(t *testing.T) {
 	groups := []uint16{0x11ec, 29}

@@ -1,7 +1,7 @@
 # `version_consistency`: cross-layer Chrome version agreement
 
 Category: passive · Module: `api/app/modules/version_consistency.py` · Protected URL: `/protected/version_consistency`
-· Default: on · Module tier: **HIGH** (the ML-DSA marker is MEDIUM and only yields a WARN)
+· Default: on · Module tier: **HIGH** (the ML-DSA and Chrome 152 markers are MEDIUM and only yield a WARN on their own)
 
 ## What it is
 
@@ -25,6 +25,7 @@ client: it only sees a challenge or a block.
 | Concept (cross-layer mismatch) | HIGH | Akamai detection-methods page, press release |
 | TLS group 4588 (131+), Kyber (<=130), ALPS 17613 (133+) / 17513 (<=132), `zstd` (123+), `priority` on h2 (124+) | HIGH | Chromium docs plus independent reports |
 | ML-DSA sigalgs in a Chrome-shaped hello (150+) | MEDIUM (approximation) | one issue plus client-library PRs |
+| GREASE signature algorithm or `trust_anchors` in a Chrome-shaped hello (152+) | MEDIUM (approximation) | client-library issues and a PR, plus the lab's own capture (see `tls_fingerprint`) |
 | Penalty for an old but genuine browser | not implemented | report §3.1 LOW: no evidence found |
 
 ## How the lab simulates it
@@ -43,7 +44,7 @@ client: it only sees a challenge or a block.
 |---|---|---|
 | non-Chromium UA (Firefox, Safari, iOS, tools) | skip | 0 |
 | all layers agree, or only the UA states a version | pass | 0 |
-| violation backed only by the MEDIUM ML-DSA marker | warn | 40 |
+| violation backed only by MEDIUM markers (ML-DSA, the Chrome 152 markers) | warn | 40 |
 | any other violation or disagreement (precise reason in `reason`) | fail | 80 |
 
 Applies to page, protected and transactional requests.
@@ -51,7 +52,7 @@ Applies to page, protected and transactional requests.
 ## How a scraper passes it
 
 Be a real current browser, or an impersonation profile whose UA, hints and TLS come from the same release. Typical
-failures: Playwright with a UA overridden to an old Chrome on a newer bundled Chromium (TLS says 150+, UA says 131);
+failures: Playwright with a UA overridden to an old Chrome on a newer bundled Chromium (TLS says 152+, UA says 131);
 curl_cffi `chrome131` with a newer UA (legacy ALPS 17513 caps the TLS window at 132 or below); a Chrome UA whose hints
 disagree.
 
@@ -61,12 +62,12 @@ disagree.
 |---|---|---|
 | naive | pass | skip 0, "Not a Chromium UA: Chrome era markers do not apply" |
 | curl_cffi `chrome131` | pass | pass 0, "Chrome version agrees across layers" |
-| Playwright | fail | fail 80, "User-Agent claims Chrome 131 but ALPS 17613 => Chrome 133+; ... ML-DSA sigalgs ... => Chrome 150+; User-Agent says Chrome 131 but sec-ch-ua says 153; User-Agent says Chrome 131 but navigator.userAgentData says 153" |
+| Playwright | fail | fail 80, "User-Agent claims Chrome 131 but ALPS 17613 => Chrome 133+; ... ML-DSA sigalgs ... => Chrome 150+; ... GREASE in signature_algorithms => Chrome 152+; User-Agent says Chrome 131 but sec-ch-ua says 153; User-Agent says Chrome 131 but navigator.userAgentData says 153" |
 
 ## Limits and caveats
 
 - Markers are release-window facts: the check rejects only what is provably inconsistent. A UA that is merely older
   than the real browser but inside every window is not flagged.
 - The Chrome 150 ML-DSA marker rests on thin evidence; Go 1.27 also sends ML-DSA, so it only counts with other Chrome
-  marks.
+  marks. The Chrome 152 markers rest on client-library issues and PRs and count only when present.
 - Akamai's real rules are unknown ([KNOWN_GAPS](../KNOWN_GAPS.md) item 9).

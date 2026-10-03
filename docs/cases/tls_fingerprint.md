@@ -24,8 +24,9 @@ curl, Go's `crypto/tls`, NSS in Firefox, Apple's stack in Safari) produces a rec
   is a client-list type and `tls-fingerprint` a rate-control client identifier (report §1.2 case 1, [P]). The Bot
   Manager brief advertises "browser impersonation detection" ([P]).
 - Akamai's own tables, thresholds and weights are not public. The Chrome era markers (ML-KEM group 4588, ALPS 17613,
-  ML-DSA sigalgs) come from Chromium documentation and curl_cffi issue trackers, not from Akamai: they are what a
-  version-consistency check *can* use ([P]/[S], report §1.2 case 1).
+  ML-DSA sigalgs, and Chrome 152's GREASE signature algorithm and `trust_anchors` extension) come from Chromium
+  documentation and client-library issue trackers, not from Akamai: they are what a version-consistency check *can* use
+  ([P]/[S], report §1.2 case 1).
 
 ## Confidence
 
@@ -34,8 +35,9 @@ curl, Go's `crypto/tls`, NSS in Firefox, Apple's stack in Safari) produces a rec
 | TLS family vs UA family (chrome, firefox, safari, openssl, go) | HIGH | Akamai docs and blogs 2019-2026 |
 | Chrome era markers 4588 (131+), Kyber 25497 (<=130), ALPS 17613 (133+) / 17513 (<=132) | HIGH | Chromium docs plus independent reports |
 | ML-DSA sigalgs `0904/0905/0906` => Chrome 150+ | MEDIUM (approximation) | one issue plus client-library PRs; no Chromium doc found |
+| GREASE in `signature_algorithms`, `trust_anchors` (51764, 0xCA34) => Chrome 152+ | MEDIUM (approximation) | GREASE: two client-library issues plus the lab's own capture; `trust_anchors`: one PR, consistent with Chrome's JA4 going from 16 to 17 extensions; no Chromium doc read |
 | Non-permuted extension order (WARN 25) | MEDIUM (approximation) | Akamai has not said it uses this check |
-| JA4 rarity table (WARN 10) | MEDIUM (approximation) | vendor database snapshot; goes stale |
+| Known Google Chrome JA4 table (WARN 10) | MEDIUM (approximation) | vendor database snapshot; goes stale |
 | Safari 18 hello shape | MEDIUM | two 2025 captures; Safari 26 unverified |
 
 No LOW sub-feature and no flag: everything here is on by default.
@@ -66,9 +68,14 @@ The Go edge (`edge/`) parses the raw ClientHello and injects `x-ja3`, `x-ja3-has
 
 3. **Chrome-only WARNs** (only when the family check passed): the same raw extension order on 3 distinct
    connections for one `(client_ip, ja4)` => WARN 25 (store key `tlsorder:{ip}:{ja4}`, TTL 3600 s); a Chrome UA whose
-   well-formed JA4 is outside the `KNOWN_CHROME_JA4` table (about 120-131, 133-149, 152-154) => WARN 10. The
-   higher score wins.
-4. `chrome_tls_era()` is reused by `version_consistency` (see that case) and reported in `details["era"]`.
+   well-formed JA4 is outside the `KNOWN_CHROME_JA4` table (Google Chrome about 120-131, 133-149, 152-154) => WARN 10.
+   The higher score wins. The table says "not Google Chrome's hello", not "never seen": other Chromium builds that send a
+   Chrome UA land here too, and the reason names the one the lab knows (`t13d1516h2_8daaf6152771_806a8c22fdea`, which
+   Scrapfly lists as Brave 153 on Linux and which Playwright's headless shell 153 also presents).
+4. `chrome_tls_era()` is reused by `version_consistency` (see that case) and reported in `details["era"]`. Chrome 152
+   markers count only when present: Chrome 152+ puts a GREASE value first in `signature_algorithms` (the edge's
+   `x-tls-sigalgs` shows it as `grease`; JA4 drops it, otherwise the hash changes on every connection) and adds
+   `trust_anchors`. The headless shell sends the GREASE value but no `trust_anchors`, so absence proves nothing.
 
 ## How a scraper passes it
 
@@ -84,7 +91,7 @@ From the committed `RESULTS.md` (judged from the case's own signal):
 |---|---|---|
 | naive (`requests`, OpenSSL) | fail | fail 75, "Non-browser TLS stack (openssl)", JA4 `t13d3112h1_e8f1e7e78f70_b26ce05bbdd6` |
 | curl_cffi `chrome131` | pass | pass 0, "Chrome-like TLS matches Chrome UA", JA4 `t13d1516h2_8daaf6152771_02713d6af862` |
-| Playwright (bundled headless shell) | warn | warn 10, "JA4 ...806a8c22fdea is not in the known Chrome fingerprint table [medium]" |
+| Playwright (bundled headless shell) | warn | warn 10, "JA4 ...806a8c22fdea is a Chromium build's fingerprint (Brave 153 on Linux in public data), not Google Chrome's [medium]" |
 
 The Playwright JA4 depends on the exact Chromium build, which is why CI pins the `playwright` version.
 
@@ -93,6 +100,7 @@ The Playwright JA4 depends on the exact Chromium build, which is why CI pins the
 - Heuristics, not an allow-list: a client that replays a Chrome-shaped hello passes.
 - Fixtures are reconstructed values, not live captures; Safari 26 and Chrome 155+ are unverified
   ([KNOWN_GAPS](../KNOWN_GAPS.md) items 9 and 10).
-- The rarity table is a snapshot and ages every two weeks (Chrome moved to a two-week cadence with Chrome 153).
+- The known-Chrome table is a snapshot and ages every two weeks (Chrome moved to a two-week cadence with Chrome 153). A real
+  Brave user on Linux gets the same WARN 10 as the headless shell, which is why the score stays low.
 - The edge sees only the first hello of a connection; TLS resumption and multiple hosts are out of scope.
 - HTTP/3 and QUIC fingerprints are not modelled (see KNOWN_GAPS, deferred features).

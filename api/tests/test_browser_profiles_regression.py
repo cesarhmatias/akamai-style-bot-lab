@@ -54,11 +54,18 @@ CHROME_TLS = {
     "alps": "17613",
     "sigalgs": "0403,0804,0401,0503,0805,0501,0806,0601",
 }
-# Chrome 153: JA4 t13d1517h2_..._cb7bf5808d99, ML-DSA signature schemes first (Chrome 150+).
+# Chrome 153: JA4 t13d1517h2_..._cb7bf5808d99. A GREASE value first in signature_algorithms
+# (Chrome 152+), then the ML-DSA schemes (Chrome 150+); the 17th extension is trust_anchors
+# 51764 (0xCA34, Chrome 152+).
 CHROME_153_TLS = {
     **CHROME_TLS,
+    "ja3": (
+        "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,"
+        "27-65037-0-23-65281-10-11-35-16-5-13-18-51-45-43-17613-51764,4588-29-23-24,0"
+    ),
     "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
-    "sigalgs": "0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601",
+    "exts": "grease,27,65037,0,23,65281,10,11,35,16,5,13,18,51,45,43,17613,51764,grease",
+    "sigalgs": "grease,0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601",
 }
 FIREFOX_TLS = {
     "ja3": (
@@ -226,11 +233,15 @@ def test_browser_passes_header_order_and_version_consistency(
     assert (t.verdict, t.score) == (Verdict.PASS, 0), t.reason
 
 
-def test_chrome_153_layers_agree_and_tls_window_is_150_plus() -> None:
+def test_chrome_153_layers_agree_and_tls_window_is_152_plus() -> None:
     c = make_ctx(CHROME_153_WIN_UA, CHROME_153_TLS, CHROME_H2, SEC_CH_UA_153,
                  request=request_for(CHROME_153_WIN_UA, SEC_CH_UA_153))
-    layers = version_signal(c).details["layers"]
-    assert (layers["ua_major"], layers["sech_major"], layers["tls_min"]) == (153, 153, 150)
+    s = version_signal(c)
+    layers = s.details["layers"]
+    assert s.verdict == Verdict.PASS, s.reason
+    assert (layers["ua_major"], layers["sech_major"], layers["tls_min"]) == (153, 153, 152)
+    assert any("GREASE in signature_algorithms" in e for e in layers["evidence"])
+    assert any("trust_anchors" in e for e in layers["evidence"])
 
 
 @pytest.mark.parametrize("grease", ["1", "0"])

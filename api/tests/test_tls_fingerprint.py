@@ -251,6 +251,20 @@ def test_era_mldsa_only_in_chrome_shaped_hello():
     assert go.min_major is None
 
 
+def test_era_chrome_152_markers_only_in_chrome_shaped_hello():
+    """Chrome 152 puts a GREASE value first in signature_algorithms and adds trust_anchors."""
+    grease = hdrs(x_tls_sigalgs="grease,0904,0905,0906,0403,0804")
+    anchors = hdrs(x_tls_exts=ORDER.replace("17613", "17613,51764"))
+    for h in (grease, anchors):
+        chrome = chrome_tls_era(tls_view(ctx(headers=h)), chrome_shaped=True)
+        go = chrome_tls_era(tls_view(ctx(headers=h)), chrome_shaped=False)
+        assert chrome.min_major == 152
+        assert [t for b, _, t in chrome.lows if b == 152] == ["medium"]
+        assert all(b != 152 for b, _, _ in go.lows)
+    # absence proves nothing: the headless shell sends GREASE but no trust_anchors
+    assert era_for(x_tls_exts=ORDER).min_major == 133  # ALPS 17613 only
+
+
 def test_signal_details_expose_era_and_confidence():
     s = run(ctx(CH133_JA3, CH133_JA4, headers=hdrs(x_ja3_grease="1", x_tls_alps="17613")))
     assert s.verdict == Verdict.PASS
@@ -297,8 +311,19 @@ def test_order_tracking_is_per_ip_and_ja4():
 
 
 def test_unknown_chrome_ja4_warns_low_score():
-    s = run_with_store(MemoryStore(), "c1", ja4="t13d1516h2_8daaf6152771_cca3cc876f32")
+    s = run_with_store(MemoryStore(), "c1", ja4="t13d1516h2_8daaf6152771_0123456789ab")
     assert s.verdict == Verdict.WARN and s.score == 10 and s.details["ja4_known"] is False
+    assert "not in the known Chrome fingerprint table" in s.reason
+    assert s.details["ja4_chromium_build"] is False
+
+
+def test_chromium_build_ja4_warns_and_is_named():
+    """Playwright's headless shell 153 = the JA4 Scrapfly lists as Brave 153 on Linux: a real
+    Chromium hello, just not Google Chrome's (no trust_anchors, 16 extensions)."""
+    s = run_with_store(MemoryStore(), "c1", ja4="t13d1516h2_8daaf6152771_806a8c22fdea")
+    assert s.verdict == Verdict.WARN and s.score == 10
+    assert "Chromium build" in s.reason and "not Google Chrome's" in s.reason
+    assert s.details["ja4_chromium_build"] is True
 
 
 def test_known_chrome_153_ja4_passes_without_warning():

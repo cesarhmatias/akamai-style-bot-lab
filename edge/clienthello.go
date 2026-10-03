@@ -241,7 +241,8 @@ func (h *Hello) GroupsWire() string {
 }
 
 // SigAlgsWire lists signature_algorithms as 4-digit hex in wire order (GREASE as "grease").
-// Era marker: ML-DSA schemes 0904,0905,0906 first in a Chrome-shaped hello (Chrome 150+).
+// Era markers: ML-DSA schemes 0904,0905,0906 in a Chrome-shaped hello (Chrome 150+), after a
+// GREASE value that Chrome 152+ puts first in the list.
 func (h *Hello) SigAlgsWire() string {
 	return joinU16(h.SigAlgs, ",", func(v uint16) string {
 		if isGrease(v) {
@@ -346,7 +347,7 @@ func (h *Hello) JA4() string {
 		}
 	}
 	sortU16(se)
-	// GREASE is ignored everywhere in JA4. Current Chrome puts a random GREASE value at the
+	// GREASE is ignored everywhere in JA4. Chrome 152+ puts a random GREASE value at the
 	// front of signature_algorithms, so keeping it made the c part change on every connection.
 	sa := dropGrease(h.SigAlgs)
 	cin := joinU16(se, ",", hex4)

@@ -18,17 +18,18 @@ into ``ScoreReport.layers`` and the dashboard shows whether the layers agree):
 
 * ``tls_min`` / ``tls_max``: Chrome window implied by TLS markers (see
   ``tls_fingerprint.chrome_tls_era``): group 4588 => 131+, Kyber => <= 130, ALPS 17613 => 133+,
-  ALPS 17513 => <= 132, ML-DSA signature schemes in a Chrome-shaped hello => 150+ (MEDIUM).
+  ALPS 17513 => <= 132, ML-DSA signature schemes in a Chrome-shaped hello => 150+ (MEDIUM), a
+  GREASE signature algorithm or the ``trust_anchors`` extension => 152+ (MEDIUM).
 * ``hdr_min``: ``zstd`` in accept-encoding => 123+; ``priority`` header over h2 => 124+.
 * ``ua_major``: ``Chrome/<major>`` from the User-Agent; ``sech_major``: Chromium (or Google
   Chrome) brand major in ``sec-ch-ua``; ``js_major``: same brands read by the sensor
   (store key ``sensor:{session_id}``, field ``navigator.brands``; absent unless a sensor was
   posted).
 * every claimed major (UA, sec-ch-ua, JS) must lie inside ``[max(tls_min, hdr_min), tls_max]``
-  and the claimed majors must be equal. A violation backed only by the MEDIUM ML-DSA marker is
-  WARN 40; any other violation is FAIL 80 with a precise reason. Non-Chromium UAs (Firefox,
-  Safari, iOS browsers, tools) are SKIP: the era markers describe Chrome only, and Firefox also
-  sends ML-KEM.
+  and the claimed majors must be equal. A violation backed only by MEDIUM markers (ML-DSA, the
+  Chrome 152 markers) is WARN 40; any other violation is FAIL 80 with a precise reason.
+  Non-Chromium UAs (Firefox, Safari, iOS browsers, tools) are SKIP: the era markers describe
+  Chrome only, and Firefox also sends ML-KEM.
 
 How a client passes: be a real current browser, or an impersonation profile whose UA, hints and
 TLS come from the SAME release. Typical failures: Playwright with a UA overridden to an old Chrome
@@ -37,7 +38,8 @@ on a newer bundled Chromium (TLS says 150+, UA says 131); curl_cffi ``chrome131`
 
 Limits: markers are release-window facts, so the check only rejects what is provably
 inconsistent. A UA that is merely older than the real browser, while inside every window, is not
-flagged. The Chrome 150 ML-DSA marker rests on one issue plus client-library PRs.
+flagged. The Chrome 150 ML-DSA marker and the Chrome 152 markers rest on client-library issues
+and PRs, not on Chromium documentation.
 """
 
 from __future__ import annotations
@@ -85,7 +87,7 @@ class VersionConsistencyModule(DetectionModule):
         "User-Agent, sec-ch-ua and the JavaScript-reported brands."
     )
     category = "passive"
-    confidence = Confidence.HIGH  # ML-DSA (150+) is MEDIUM and only yields a WARN
+    confidence = Confidence.HIGH  # ML-DSA (150+) and the 152 markers are MEDIUM: WARN only
     applies_to = frozenset(
         {EndpointClass.PAGE, EndpointClass.PROTECTED, EndpointClass.TRANSACTIONAL}
     )

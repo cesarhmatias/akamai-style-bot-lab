@@ -10,9 +10,10 @@ How real Akamai uses it (audit report ``docs/research/akamai-audit-2026-10.md``)
   User-Agents (2017 white paper, section 1.2 case 1) [HIGH]; JA4 is exposed to the origin,
   ``TLS_FINGERPRINT`` is a client-list type and ``tls-fingerprint`` a rate-control identifier
   (2026 API docs) [HIGH]; "browser impersonation detection" is advertised [HIGH].
-* Era markers (4588, ALPS 17613, ML-DSA) come from Chromium docs and curl_cffi issue
-  trackers, not from Akamai: they are what a version-consistency check CAN use [HIGH for
-  4588/ALPS, MEDIUM for ML-DSA: one issue plus client-library PRs].
+* Era markers (4588, ALPS 17613, ML-DSA, and Chrome 152's GREASE signature algorithm and
+  ``trust_anchors`` extension) come from Chromium docs and client-library issue trackers, not
+  from Akamai: they are what a version-consistency check CAN use [HIGH for 4588/ALPS, MEDIUM
+  for ML-DSA and the 152 markers: issues and PRs, no Chromium doc read].
 * Akamai has not published whether it uses a non-permuted extension order or "JA4 never seen
   in real traffic" as signals [MEDIUM, lab approximation]. Akamai does say a bot found at one
   customer joins its known-bot library for all customers within minutes.
@@ -28,15 +29,24 @@ How this lab simulates it, per request (details carry a per-check ``confidence``
 * era markers (:func:`chrome_tls_era`, reused by ``version_consistency``): group 4588 (0x11EC,
   X25519MLKEM768) => Chrome 131+; Kyber 25497 (0x6399) => <= 130; ALPS 17613 => 133+; ALPS
   17513 => <= 132; ML-DSA sigalgs 0x0904/0x0905/0x0906 inside a Chrome-shaped hello => 150+
-  (MEDIUM: Go 1.27 also sends ML-DSA, so it only counts together with the other Chrome marks).
+  (MEDIUM: Go 1.27 also sends ML-DSA, so it only counts together with the other Chrome marks);
+  a GREASE value in signature_algorithms (``kTlsGreaseSigalgs``, first in the list) or the
+  ``trust_anchors`` extension 51764 (0xCA34) in a Chrome-shaped hello => 152+ (MEDIUM:
+  bogdanfinn/tls-client #262, wi1dcard/fingerproxy #44, jawah/utls PR #1, all 2026-08/09).
+  Playwright's headless shell 153 sends the GREASE value but not ``trust_anchors`` (16
+  extensions instead of Chrome's 17; Scrapfly lists the same JA4 for Brave 153 on Linux), so
+  only the presence of either marker counts, never its absence.
 * extension-order signal (MEDIUM): the edge sends ``x-tls-exts`` (raw order) and ``x-tls-conn``
   (per-connection id). The store remembers the order per ``(client_ip, ja4)``; a Chrome-family
   hello whose order repeats identically over >= 3 DISTINCT connections is WARN 25 (Chrome 110+
   shuffles on every connection).
-* rarity (MEDIUM): a Chrome UA with a well-formed JA4 outside the small
-  :data:`KNOWN_CHROME_JA4` table is WARN 10, as a cheap stand-in for "fingerprint never seen
-  in real traffic". The table is a vendor-database snapshot (Scrapfly, 2026-10) and goes stale
-  as Chrome now ships every two weeks (since Chrome 153, 2026-09-08), so the score is low.
+* not-Google-Chrome JA4 (MEDIUM): a Chrome UA with a well-formed JA4 outside the small
+  :data:`KNOWN_CHROME_JA4` table is WARN 10. The table holds Google Chrome values only, so the
+  check says "this hello is not Google Chrome's", not "never seen": other Chromium builds that
+  send a Chrome UA land here too (Playwright's headless shell 153 presents
+  ``t13d1516h2_8daaf6152771_806a8c22fdea``, which Scrapfly lists as Brave 153 on Linux), and so
+  does every Chrome release newer than the snapshot (Scrapfly, 2026-10; Chrome ships every two
+  weeks since Chrome 153, 2026-09-08). Hence the low score.
 
 How a client passes: use a real, current browser (or an impersonation profile that is current).
 Note the harness's curl_cffi ``chrome131`` profile is about 23 majors old and sends the legacy
@@ -60,6 +70,9 @@ KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
     "chrome-ja4-120-131": {"ja4": "t13d1516h2_8daaf6152771_02713d6af862", "family": "chrome"},
     "chrome-ja4-133-149": {"ja4": "t13d1516h2_8daaf6152771_d8a2da3f94cd", "family": "chrome"},
     "chrome-ja4-152-154": {"ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99", "family": "chrome"},
+    # Chromium 153 without trust_anchors (16 extensions): Brave 153 on Linux (Scrapfly, seen
+    # 2026-09-13) and Playwright's chrome-headless-shell 153 (lab capture). Not Google Chrome.
+    "chromium-ja4-153": {"ja4": "t13d1516h2_8daaf6152771_806a8c22fdea", "family": "chrome"},
     "safari-ja4-16-18": {"ja4": "t13d2014h2_a09f3c656075_e7c285222651", "family": "safari"},
     "firefox-ja4": {"ja4": "t13d1717h2_5b57614c22b0_3cbfd9057e0d", "family": "firefox"},
     "python-urllib3-ja4": {"ja4": "t13d1812h1_85036bcba153_375ca2c5e164", "family": "openssl"},
@@ -67,9 +80,13 @@ KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
     "go-ja4": {"ja4": "t13d1312h2_f57a46bbacb6_ab7e3b40a677", "family": "go"},
 }
 
-# Rarity table: Chrome JA4 values (about 120-131, 133-149, 152-154). Snapshot, goes stale.
+# Google Chrome JA4 values (about 120-131, 133-149, 152-154). Snapshot, goes stale.
 KNOWN_CHROME_JA4 = frozenset(
     v["ja4"] for k, v in KNOWN_FINGERPRINTS.items() if k.startswith("chrome-ja4-")
+)
+# Other Chromium builds that also send a Chrome User-Agent (named in the WARN reason).
+KNOWN_CHROMIUM_JA4 = frozenset(
+    v["ja4"] for k, v in KNOWN_FINGERPRINTS.items() if k.startswith("chromium-ja4-")
 )
 JA4_WELL_FORMED = re.compile(r"^[tq][0-9a-z]{9}_[0-9a-f]{12}_[0-9a-f]{12}$")
 # Extension-order tracking (MEDIUM): distinct connections with an identical order -> WARN.
@@ -81,6 +98,7 @@ RARITY_SCORE = 10
 KYBER_GROUP = "25497"  # 0x6399, X25519Kyber768Draft00 (Chrome 124-130)
 MLKEM_GROUP = "4588"  # 0x11EC, X25519MLKEM768 (Chrome 131+)
 MLDSA_SIGALGS = frozenset({"0904", "0905", "0906"})
+TRUST_ANCHORS_EXT = "51764"  # 0xCA34, TLS Trust Anchor Identifiers (Chrome 152+)
 
 GREASE = {n for n in range(0x0A0A, 0xFAFB, 0x1010)}
 ALPS_EXTS = {"17513", "17613"}
@@ -203,10 +221,11 @@ class TlsView:
     """Era-relevant TLS fields of one request (edge headers with JA3 fallbacks)."""
 
     groups: list[str]
-    sigalgs: list[str]
+    sigalgs: list[str]  # wire order; a GREASE value reads "grease" (edge SigAlgsWire)
     alps: str  # "17613" | "17513" | "none" | "" (unknown)
     exts_order: str
     conn_id: str
+    exts: frozenset[str] = frozenset()  # decimal extension ids, GREASE removed
 
 
 def tls_view(ctx: RequestContext) -> TlsView:
@@ -215,10 +234,10 @@ def tls_view(ctx: RequestContext) -> TlsView:
     groups = _split(ctx.header("x-tls-groups"))
     if not groups and ctx.ja3.count(",") >= 3:
         groups = [g for g in ctx.ja3.split(",")[3].split("-") if g]
+    _, exts = _parse_ja3(ctx.ja3) if ctx.ja3 else ([], set())
+    exts |= {e for e in re.split(r"[,-]", ctx.header("x-tls-exts") or "") if e.isdigit()}
     alps = (ctx.header("x-tls-alps") or "").strip()
     if not alps:
-        _, exts = _parse_ja3(ctx.ja3) if ctx.ja3 else ([], set())
-        exts |= {e for e in re.split(r"[,-]", ctx.header("x-tls-exts") or "") if e.isdigit()}
         alps = "17613" if "17613" in exts else "17513" if "17513" in exts else ""
     return TlsView(
         groups=[g for g in groups if g != "grease"],
@@ -226,14 +245,15 @@ def tls_view(ctx: RequestContext) -> TlsView:
         alps=alps,
         exts_order=(ctx.header("x-tls-exts") or "").strip(),
         conn_id=(ctx.header("x-tls-conn") or "").strip(),
+        exts=frozenset(exts),
     )
 
 
 def chrome_tls_era(view: TlsView, *, chrome_shaped: bool) -> TlsEra:
     """Chrome version window from TLS era markers (audit report 1.2 case 1 and 2.2).
 
-    ``chrome_shaped`` must come from :func:`classify_tls` (family == "chrome"); the ML-DSA
-    marker is only trusted then, because Go 1.27 also advertises ML-DSA (MEDIUM tier).
+    ``chrome_shaped`` must come from :func:`classify_tls` (family == "chrome"); the ML-DSA and
+    Chrome 152 markers are only trusted then, because Go 1.27 also advertises ML-DSA (MEDIUM).
     """
     era = TlsEra()
 
@@ -259,6 +279,10 @@ def chrome_tls_era(view: TlsView, *, chrome_shaped: bool) -> TlsEra:
         hi(132, "ALPS 17513 => Chrome <= 132", "high")
     if chrome_shaped and MLDSA_SIGALGS & set(view.sigalgs):
         lo(150, "ML-DSA sigalgs (0904/0905/0906) in Chrome-shaped hello => Chrome 150+", "medium")
+    if chrome_shaped and "grease" in view.sigalgs:
+        lo(152, "GREASE in signature_algorithms => Chrome 152+", "medium")
+    if chrome_shaped and TRUST_ANCHORS_EXT in view.exts:
+        lo(152, "trust_anchors extension (0xCA34) => Chrome 152+", "medium")
     return era
 
 
@@ -316,8 +340,8 @@ class TlsFingerprintModule(DetectionModule):
             "ja4": ctx.ja4, "sec_ch_ua": brands,
             "era": era.as_dict() if fam == "chrome" else None,
             "check_confidence": {"family": "high", "era_markers": "high",
-                                 "ml_dsa": "medium", "extension_order": "medium",
-                                 "ja4_rarity": "medium"},
+                                 "ml_dsa": "medium", "chrome_152_markers": "medium",
+                                 "extension_order": "medium", "ja4_rarity": "medium"},
         }
         if fam == "chrome":
             if uaf == "chrome" or (uaf in {"unknown"} and brands):
@@ -363,11 +387,15 @@ class TlsFingerprintModule(DetectionModule):
             uaf == "chrome" and JA4_WELL_FORMED.match(ctx.ja4)
             and ctx.ja4 not in KNOWN_CHROME_JA4
         ):
-            warns.append((
-                RARITY_SCORE,
-                f"JA4 {ctx.ja4} is not in the known Chrome fingerprint table [medium]",
-            ))
+            why = (
+                "is a Chromium build's fingerprint (Brave 153 on Linux in public data), "
+                "not Google Chrome's"
+                if ctx.ja4 in KNOWN_CHROMIUM_JA4
+                else "is not in the known Chrome fingerprint table"
+            )
+            warns.append((RARITY_SCORE, f"JA4 {ctx.ja4} {why} [medium]"))
             d["ja4_known"] = False
+            d["ja4_chromium_build"] = ctx.ja4 in KNOWN_CHROMIUM_JA4
         if not warns:
             return self.signal(Verdict.PASS, 0, "Chrome-like TLS matches Chrome UA", **d)
         score = max(sc for sc, _ in warns)
