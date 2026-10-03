@@ -48,7 +48,7 @@ or encoding algorithms, and nothing in it requires sending automated traffic to 
 | 3 | `header_order` | Needs correction | Add `zstd` (Chrome 123+); `priority` only on h2/h3 (Chrome 124+), so flag it on HTTP/1.1; reduced-UA format; UA major equals `sec-ch-ua` major; `HeadlessChrome` tokens | [detection methods, 2026-03-01][detm] [P]; [priority I2S, 2024-02-16][prio] [P]; [zstd I2S, 2024][zstd] [P]; [UA reduction][uar] [P]; [curl_cffi #785, 2026-06-19][cc785] [S] |
 | 4 | `abck_cookie` | Needs correction | Real shape `HEX32~flag~YAAQ…~-1~-1~-1` (lab: 64 hex chars and two `-1`); add an "N posts, no `~0~`" mode; bind validated state to fingerprint continuity | [httpx #2287, 2022-06-30][httpx] [S]; [Coraza #1620, 2026-05-18][coraza] [S]; [Hyper docs][hyper] [V] |
 | 5 | `sensor_data` | Needs correction | Randomized per-session same-origin script path; POST `{"sensor_data": …}` back to that path; 1–3 posts; version-prefixed payload keyed to the script build and `bm_sz`; add an inline-telemetry variant | [Bot Manager brief, 10/2023][bmbrief] [P]; [WSA dimensions, 2026-09-30][wsa] [P]; [Winney, 2019-12-30][winney] [S]; [Hyper docs][hyper] [V]; [v3 helper][v3] [V] |
-| 6 | `proof_of_work` | Needs correction | Mandatory wait (`chlg_duration`); re-challenge interval; 428 JSON for XHR; `sec-cpt-if` iframe; verify under `/_sec/`; check `sec_cpt` (`~3~`); providers crypto/behavioral/adaptive; the arithmetic variant has no Akamai analogue | [challenge action API, 2026-06-02][chal] [P]; [brief, 10/2023][bmbrief] [P]; [any.run, 2020-06-19][anyrun20] [S]; [PriceStalker, 2026-09-26][ps] [S]; [Hyper 428][hyper428] [V] |
+| 6 | `proof_of_work` | Needs correction | Mandatory wait (`chlg_duration`); re-challenge interval; 428 JSON for XHR; `sec-cpt-if` iframe; verify under `/_sec/`; check `sec_cpt` (`~3~`); providers crypto/behavioral/adaptive; **keep** the arithmetic variant and model it as the cookieless `bm-verify` interstitial (`/_sec/verify?provider=interstitial`), a real mechanism (Medium; corrected 2026-10-02, see the case note) | [challenge action API, 2026-06-02][chal] [P]; [brief, 10/2023][bmbrief] [P]; [any.run, 2020-06-19][anyrun20] [S]; [PriceStalker, 2026-09-26][ps] [S]; [bershka-scraper, 2026-09-22][bershka] [S]; [sugarplum #172/#177, 2026-09-27][sugar172] [S]; [Hyper 428][hyper428] [V] |
 | 7 | `pixel_challenge` | Needs correction | `bm_sz` is a seed cookie, not a challenge. Pixel: value embedded in the HTML (`bazadebezolkohpepadr`), script `/akam/<n>/<hex>`, POST to `/akam/<n>/pixel_<hex>`, tied to `ak_bmsc`; drop `/config` | [any.run, 2019-11-04][anyrun19] [S]; [Winney, 2019-12-30][winney] [S]; [PriceStalker][ps] [S]; [crawlex, 2026-06-01][cxpixel] [V] |
 | 8 | `sbsd_challenge` | Needs correction (low confidence) | Script `/<path>?v=<UUID>` (blocking mode adds `&t=`); POST `{"body": …}` to the same path (passive mode: 2 posts); `bm_so`/`sbsd_o` are issued first and used as input; cookies `bm_s`, `bm_ss`, `bm_sc`, `bm_lso` | [Hyper SBSD][hypersbsd] [V]; [xhrdev, 2026-09-21][xhr] [V]. No primary source |
 | 9 | `behavioral` | Accurate (concept); needs expansion | Premier-only; evaluated on transactional endpoints; multi-modal (keys, touch, device motion); feeds the Bot Score; 2026 interactive behavioral challenge | [detection methods][detm] [P]; [Content Protector PR, 2024-02-06][cppr] [P]; [Akamai blog, 2026-03-10][avf] [P] |
@@ -221,11 +221,33 @@ Current values:
   - A 2026 scraper fix recognizes the behavioral interstitial by the classes `sec-if-cpt-container`,
     `scf-akamai-logo`, `sec-bc-tile-parent` and `sec-bc-text-container` (HTTP 200, about 2.7 KB, no `<title>`)
     ([PriceStalker PR #226, 2026-09-26][ps] [S]).
-- Lab gaps: no minimum duration (a fast solver passes instantly), no 428, the `sec_cpt` cookie is never checked, and I
-  found no Akamai analogue for the arithmetic "legacy" variant. Relabel it as lab-only or drop it.
+- **The cookieless interstitial (correction, 2026-10-02).** The first version of this report said the lab's
+  arithmetic variant had no Akamai analogue and suggested relabeling it as lab-only or dropping it. **That guidance is
+  retracted; do not delete the variant on that basis.** The arithmetic page is the interstitial challenge the Bot
+  Manager brief describes, the one that "requires clients to prove they support storing cookies and executing
+  JavaScript" ([brief, 10/2023][bmbrief] [P]). Two independent 2026 sources describe the same artifact:
+  - A cookieless client gets HTTP 200 (about 2.1–2.4 KB) with a `bm-verify` token and one line of arithmetic,
+    `var i = 1789910678; var j = i + Number("3886" + "11036");`. The page's script POSTs
+    `{"bm-verify": token, "pow": i + 388611036}` to `/_sec/verify?provider=interstitial` and reloads. The success
+    response sets `_abck` and `bm_sz` alongside `ak_bmsc`, and the cleared session kept getting the real page
+    ([bershka-scraper README, measured 2026-09-19 to 09-22][bershka] [S]).
+  - The interstitial body carries the markers `bm-verify=AAQ…`, `/interstitial/ic.html`, `/_sec/verify` and
+    `triggerInterstitialChallenge()`, plus `<meta http-equiv="refresh" content="5; URL='<url>&bm-verify=AAQ…'">`.
+    The token is one-shot: refetching with it returns the real page once, and a second interstitial is final
+    ([sugarplum issue #172][sugar172] and [PR #177][sugar177], both 2026-09-27 [S]).
+  - A third, unpublished observation from the lab owner's own HAR-derived client (2026) matches the same shape: the
+    `var i = <int>;` / `var j = i + Number("<a>" + "<b>");` pair, a `"bm-verify"` field in the script, and a JSON POST
+    to `/_sec/verify?provider=interstitial`. That client also tolerates an optional same-origin JSON `location` in the
+    verify response; no source above shows one, so treat it as unconfirmed.
+
+  Confidence: **Medium** (concept primary; artifacts from two independent 2026 secondary sources). Because a regex can
+  solve the basic arithmetic without running JavaScript, the lab should treat solving it as weak evidence (warn, not
+  pass) and may add a lab-only hardened variant that randomizes the expression shape to break fixed regexes.
+- Lab gaps: no minimum duration (a fast solver passes instantly), no 428, and the `sec_cpt` cookie is never checked.
 - Fix: store `issued_at` with the challenge and reject a correct answer that arrives before `chlg_duration`; return
   428 JSON to `Accept: application/json` and the iframe page to navigations; support `count > 1`; re-challenge after
-  the interval; validate `sec_cpt`.
+  the interval; validate `sec_cpt`; model the arithmetic variant as the cookieless `bm-verify` interstitial with
+  verification at `/_sec/verify?provider=interstitial`.
 
 #### Case 7: `pixel_challenge` (and `bm_sz`)
 
@@ -539,6 +561,8 @@ The features below are ordered by value for an Akamai-fidelity lab.
 | Random sensor path, POST to the same path, 1–3 posts | Medium | Vendor docs, Akamai's "dynamic obfuscation" claim, a 2019 sighting |
 | v3 prefix and script/`bm_sz` keying | Medium | A single reverse-engineering author (about 2024) |
 | sec-cpt artifacts: 428, iframe, providers, `~3~` | Medium | Vendor docs, a 2020 sandbox capture, a 2026 PR |
+| Cookieless `bm-verify` interstitial (arithmetic `pow`, `/_sec/verify?provider=interstitial`, cookies on success) | Medium | Akamai brief (concept) plus two independent 2026 captures; corrects the earlier "no analogue" claim |
+| JSON `location` in the interstitial verify response | Low | Only tolerated by one unpublished client; published sources show reload or meta refresh |
 | Behavioral-challenge markup classes | Medium | One 2026 PR, consistent with Akamai's 2026 blog |
 | Pixel artifacts | Medium | 2019 captures, a 2026 PR, vendors |
 | `Akamai-User-Risk` format | Medium | Integrator doc (2025), Auth0, Akamai brief (header injection) |
@@ -568,7 +592,9 @@ The features below are ordered by value for an Akamai-fidelity lab.
 3. The sensor payload's current version prefix, and whether a site uses standard or inline telemetry (look for
    `akamai-bm-telemetry` on XHR).
 4. The SBSD script URL, body shape, cookies, and passive versus blocking behavior.
-5. sec-cpt: 428 versus 200, the provider, `chlg_duration` values, the verify path.
+5. sec-cpt: 428 versus 200, the provider, `chlg_duration` values, the verify path. For the `bm-verify` interstitial:
+   whether the verify response ever carries a JSON `location` (published sources show a reload or a meta refresh
+   with a single-use token instead).
 6. The behavioral challenge's DOM and the events it records.
 7. The pixel POST body, and which cookie changes afterwards.
 8. Deny responses: `Server`, `Mime-Version`, the reference format. Tarpit and serve-alternate are hard to observe by
@@ -655,6 +681,9 @@ third-party sites, and scrub cookies and tokens from HARs before committing them
 [winney]: https://grantwinney.com/websites-requesting-access-to-motion-sensors/
 [ps]: https://github.com/mikeknight85/PriceStalker/pull/226
 [cpbmsv]: https://cookiepedia.co.uk/cookies/bm_sv
+[bershka]: https://github.com/2scraper/bershka-scraper
+[sugar172]: https://github.com/barkley-assistant/sugarplum/issues/172
+[sugar177]: https://github.com/barkley-assistant/sugarplum/pull/177
 [hyper]: https://docs.hypersolutions.co/akamai-web/getting-started
 [hyper428]: https://docs.hypersolutions.co/akamai-web/handling-428-status-code-sec-cpt
 [hypersbsd]: https://docs.hypersolutions.co/akamai-web/sbsd-introduction
