@@ -13,7 +13,9 @@ hashing. We therefore use structural heuristics that survive permutation: the se
 extensions (ALPS 17513/17613, compress_certificate 27, ECH 65037, GREASE), and the
 cipher-suite prefix (Chrome/BoringSSL: 4865,4866,4867 first; OpenSSL 3: 4866,4867,4865;
 Go: 4865,4866,4867 then ECDHE-GCM without ALPS; Firefox/NSS: 4865,4867,4866 plus
-delegated_credentials 34 and record_size_limit 28).
+delegated_credentials 34 and record_size_limit 28; Safari/WebKit: Chrome's cipher
+prefix and compress_certificate 27 but NO ALPS, NO ECH and legacy CBC/3DES suites at the
+tail, ``...-53-47-49160-49170-10``; JA4 family ``t13d2014h2_a09f3c656075_*``).
 
 How a client passes: use a real browser or an impersonating client (``curl_cffi``
 with ``impersonate="chrome"``) so the actual handshake is Chrome's. Changing headers
@@ -40,6 +42,12 @@ ALPS_EXTS = {"17513", "17613"}
 CHROME_CIPHER_PREFIX = ("4865", "4866", "4867")
 OPENSSL_CIPHER_PREFIX = ("4866", "4867", "4865")
 FIREFOX_CIPHER_PREFIX = ("4865", "4867", "4866")
+ECH_EXT = "65037"
+# Safari 16-18 (macOS + iOS) JA4 cipher-suite hash (middle JA4 part): Scrapfly JA4 DB.
+SAFARI_JA4_CIPHER_HASH = "a09f3c656075"
+# WebKit still offers 3DES (0x000a = 10) and the ECDHE CBC-SHA1 suites; no other
+# mainstream stack that shares Chrome's TLS 1.3 prefix does.
+SAFARI_LEGACY_TAIL = ("49160", "49170", "10")
 
 
 def _parse_ja3(ja3: str) -> tuple[list[str], set[str]]:
@@ -51,7 +59,7 @@ def _parse_ja3(ja3: str) -> tuple[list[str], set[str]]:
 
 
 def classify_tls(ja3: str, ja4: str, grease_header: str | None, exts_header: str | None) -> dict:
-    """Return {family, evidence}; family in chrome|firefox|openssl|go|unknown."""
+    """Return {family, evidence}; family in chrome|firefox|safari|openssl|go|unknown."""
     ciphers, exts = _parse_ja3(ja3) if ja3 else ([], set())
     if exts_header:
         exts |= {e for e in re.split(r"[,-]", exts_header) if e.isdigit()}
@@ -75,6 +83,23 @@ def classify_tls(ja3: str, ja4: str, grease_header: str | None, exts_header: str
     if prefix == CHROME_CIPHER_PREFIX:
         chrome_marks += 1
         evidence.append("cipher prefix 4865,4866,4867")
+    ja4_parts = ja4.split("_")
+    safari_ja4 = (
+        len(ja4_parts) == 3 and ja4_parts[0].startswith("t13")
+        and ja4_parts[1] == SAFARI_JA4_CIPHER_HASH
+    )
+    safari_shape = (
+        prefix == CHROME_CIPHER_PREFIX
+        and tuple(ciphers[-3:]) == SAFARI_LEGACY_TAIL
+        and "27" in exts
+    )
+    # Safari/WebKit: no ALPS and no ECH (Chrome has both), whether or not GREASE is sent.
+    if (safari_shape or safari_ja4) and not exts & (ALPS_EXTS | {ECH_EXT}):
+        return {
+            "family": "safari",
+            "evidence": ["WebKit hello: Chrome-style prefix, no ALPS/ECH, 3DES/CBC tail"]
+            + (["JA4 t13d..._a09f3c656075"] if safari_ja4 else []),
+        }
     firefox = bool(exts & {"34", "28"}) and prefix == FIREFOX_CIPHER_PREFIX
     if firefox:
         return {"family": "firefox", "evidence": ["delegated_credentials/record_size_limit"]}
@@ -89,6 +114,11 @@ def classify_tls(ja3: str, ja4: str, grease_header: str | None, exts_header: str
 
 def ua_family(ua: str) -> str:
     low = ua.lower()
+    # iOS/iPadOS rule: Apple requires every iOS browser (CriOS, FxiOS, EdgiOS, ...) to
+    # use WebKit's network stack, so they all present a Safari/WebKit ClientHello and
+    # must be treated as the "safari" family regardless of the browser brand token.
+    if re.search(r"crios/|fxios/|edgios/|iphone|ipad|ipod", low):
+        return "safari"
     if "firefox/" in low:
         return "firefox"
     if "chrome/" in low or "chromium/" in low or "headlesschrome" in low or "edg/" in low:
@@ -125,6 +155,12 @@ class TlsFingerprintModule(DetectionModule):
                 return self.signal(Verdict.PASS, 0, "Chrome-like TLS matches Chrome UA", **d)
             return self.signal(
                 Verdict.FAIL, 85, f"Chrome TLS stack but User-Agent claims {uaf}", **d
+            )
+        if fam == "safari":
+            if uaf == "safari":
+                return self.signal(Verdict.PASS, 0, "Safari/WebKit TLS matches Safari UA", **d)
+            return self.signal(
+                Verdict.FAIL, 85, f"Safari/WebKit TLS stack but User-Agent claims {uaf}", **d
             )
         if fam == "firefox":
             if uaf == "firefox" and not brands:
