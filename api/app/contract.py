@@ -81,6 +81,19 @@ class Action(StrEnum):
     SAFEGUARD = "safeguard"
 
 
+# Actions that mean the client did NOT receive the real resource ("blocked" in reports):
+# a deny page, a tarpit-held minimal response, or a challenge. Delay, slow, serve_alternate,
+# safeguard, monitor and allow all hand the client a normal 2xx response.
+BLOCKING_ACTIONS = frozenset({Action.DENY, Action.TARPIT, Action.CHALLENGE})
+
+# Conventional keys of ``Signal.details`` the engine reads (additive, all optional).
+DETAIL_TELEMETRY_TYPE = "telemetry_type"  # "standard" / "inline" / "native"
+DETAIL_LAYERS = "layers"  # version_consistency: per-layer version agreement -> ScoreReport.layers
+DETAIL_BOT_NAME = "bot_name"  # known_bots: classified bot name, e.g. "amazonbot"
+DETAIL_BOT_CATEGORY = "bot_category"  # known_bots: e.g. "Web Search Engine Bots"
+DETAIL_USER_RISK = "user_risk"  # account_protector: dict feeding the Akamai-User-Risk header
+
+
 class Signal(BaseModel):
     """Output of a single module for a single request."""
 
@@ -131,6 +144,10 @@ class ScoreReport(BaseModel):
     reference: str = ""  # deny: Akamai-style "Reference #18.xxxx.ts.xxxx" mapped to this report
     layers: dict[str, Any] = Field(default_factory=dict)  # cross-layer version agreement (§2.2)
     origin_headers: dict[str, str] = Field(default_factory=dict)  # verdict headers to origin (§2.9)
+    # --- v2.1 (additive) ---------------------------------------------------------------
+    is_human: bool = False  # Bot Score 0: no detection fired (EdgeWorkers isHuman() analogue)
+    is_safeguard: bool = False  # set aside so a human is not trapped (isSafeguardResponse analogue)
+    challenge_provider: str = ""  # crypto | behavioral | adaptive | interactive (when challenged)
 
 
 class SessionStore(Protocol):
@@ -220,6 +237,23 @@ class DetectionModule(ABC):
         serves (landing page, interstitials). Use for per-session script paths and values
         embedded in markup (e.g. the pixel's global). ``ctx.session_id`` is always set."""
         return []
+
+    def root_router(self) -> Any | None:  # fastapi.APIRouter | None
+        """v2.1: routes mounted at the site root (no ``/akam/<slug>`` prefix), for vendor-style
+        absolute paths such as ``/_sec/verify``. Mounted before the catch-all route."""
+        return None
+
+    # v2.1: challenge providers this module can serve (e.g. {"crypto", "adaptive"}); the
+    # response policy's ``challenge_provider`` picks the enabled module that lists it.
+    challenge_providers: ClassVar[frozenset[str]] = frozenset()
+
+    async def issue_challenge(
+        self, request: Any, ctx: RequestContext, provider: str, *, html: bool
+    ) -> Any | None:
+        """v2.1: build the challenge response (a fastapi Response) for the ``challenge`` action.
+        ``html`` is True for browser navigations (interstitial page), False for XHR/API
+        callers (428 JSON). Return None to decline."""
+        return None
 
     async def handle_dynamic(self, request: Any, ctx: RequestContext) -> Any | None:
         """v2: claim a request on an otherwise unrouted same-origin path (GET or POST),
