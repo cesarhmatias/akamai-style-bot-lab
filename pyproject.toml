@@ -46,3 +46,12 @@ omit = ["api/app/main.py"]
 [tool.coverage.report]
 fail_under = 75
 show_missing = true
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Not a distributable package: the install only pulls dependencies.
+# Code is imported via pythonpath (api/) and `python -m clients.*` from the repo root.
+packages = []
