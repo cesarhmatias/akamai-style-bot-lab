@@ -177,3 +177,21 @@ async def test_ajax_injection_snippet_follows_flag(http: httpx.AsyncClient) -> N
         js = await http.get(f"/akam/interactive_challenge/{name}")
         assert js.status_code == 200 and "javascript" in js.headers["content-type"]
     assert "428" in (await http.get("/akam/interactive_challenge/ajax_inject.js")).text
+
+
+async def test_challenge_satisfied_is_scoped_to_own_providers() -> None:
+    """A solved tile game waives only interactive/behavioral challenges, not crypto ones."""
+    from app.contract import RequestContext
+
+    store = MemoryStore()
+    clock = Clock()
+    mod = InteractiveChallenge(clock=clock)
+    await store.set(f"ichal:ok:{SID}", '{"cookie": "c1", "solved_at": 5000.0}')
+    ctx = RequestContext(
+        method="GET", path="/protected/all", client_ip="203.0.113.7", headers=[],
+        header_order=[], cookies={"sec_bc": "c1"}, user_agent="", session_id=SID, store=store,
+    )
+    assert await mod.challenge_satisfied(ctx, "interactive")
+    assert await mod.challenge_satisfied(ctx, None)
+    assert not await mod.challenge_satisfied(ctx, "crypto")
+    assert not await mod.challenge_satisfied(ctx, "interstitial")

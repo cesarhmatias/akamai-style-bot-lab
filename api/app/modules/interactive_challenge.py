@@ -175,6 +175,10 @@ class InteractiveChallenge(DetectionModule):
         return bool(cookie) and cookie == rec["cookie"] and self.clock() - rec["solved_at"] <= ttl
 
     async def challenge_satisfied(self, ctx: RequestContext, provider: str | None = None) -> bool:
+        # Only vouch for providers this module serves, so a solved tile game does not
+        # waive a crypto/interstitial challenge the policy asked for (and vice versa).
+        if provider is not None and provider not in self.challenge_providers:
+            return False
         return await self._satisfied(ctx)
 
     async def evaluate(self, ctx: RequestContext) -> Signal:
