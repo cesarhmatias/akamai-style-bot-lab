@@ -112,7 +112,7 @@ func ParseClientHello(raw []byte) (*Hello, error) {
 	}
 	h := &Hello{Version: body.u16()}
 	h.Random = append([]byte(nil), body.take(32)...) // random
-	body.take(body.u8()) // session id
+	body.take(body.u8())                             // session id
 	cs := &reader{b: body.take(int(body.u16()))}
 	for len(cs.b) >= 2 && cs.err == nil {
 		h.Ciphers = append(h.Ciphers, cs.u16())
