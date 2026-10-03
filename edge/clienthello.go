@@ -346,12 +346,15 @@ func (h *Hello) JA4() string {
 		}
 	}
 	sortU16(se)
+	// GREASE is ignored everywhere in JA4. Current Chrome puts a random GREASE value at the
+	// front of signature_algorithms, so keeping it made the c part change on every connection.
+	sa := dropGrease(h.SigAlgs)
 	cin := joinU16(se, ",", hex4)
-	if len(h.SigAlgs) > 0 {
-		cin += "_" + joinU16(h.SigAlgs, ",", hex4)
+	if len(sa) > 0 {
+		cin += "_" + joinU16(sa, ",", hex4)
 	}
 	c := "000000000000"
-	if len(se) > 0 || len(h.SigAlgs) > 0 {
+	if len(se) > 0 || len(sa) > 0 {
 		c = sha12(cin)
 	}
 	return a + "_" + b + "_" + c

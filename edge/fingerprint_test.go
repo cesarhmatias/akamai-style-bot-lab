@@ -295,3 +295,24 @@ func TestHeaderNames(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+// Chrome 150+ sends a random GREASE codepoint first in signature_algorithms. JA4 ignores GREASE,
+// so two handshakes that differ only in that value must share one fingerprint.
+func TestJA4IgnoresGreaseSignatureAlgorithms(t *testing.T) {
+	groups := []uint16{0x11ec, 29}
+	a, err := ParseClientHello(chromeLikeHello(17613, groups, []uint16{0x0a0a, 0x0904, 0x0403}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := ParseClientHello(chromeLikeHello(17613, groups, []uint16{0x7a7a, 0x0904, 0x0403}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.JA4() != b.JA4() {
+		t.Errorf("JA4 changes with the GREASE sigalg: %q vs %q", a.JA4(), b.JA4())
+	}
+	c, _ := ParseClientHello(chromeLikeHello(17613, groups, []uint16{0x0904, 0x0403}))
+	if a.JA4() != c.JA4() {
+		t.Errorf("GREASE sigalg must not enter the hash: %q vs %q", a.JA4(), c.JA4())
+	}
+}
