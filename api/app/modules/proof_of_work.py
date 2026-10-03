@@ -1,61 +1,109 @@
-"""Proof-of-work interstitial (Akamai ``sec_cpt`` pattern).
+"""Proof-of-work / ``sec_cpt`` challenge (case 6, audit §1.2 case 6 and §2.4).
 
-Two variants are served: ``simple`` (legacy arithmetic) and ``hard`` (sha256
-leading-zero search). Only the ``hard`` variant unlocks the protected resource.
+Mechanism
+    A client that cannot execute JavaScript, store cookies and spend time is stopped by a
+    challenge it must solve before it may continue. The challenge is bound to the session
+    (``bm_sz``), single use, and has a MINIMUM wall-clock duration: a correct answer that
+    arrives before ``chlg_duration`` seconds have passed is rejected.
+
+How real Akamai uses it (report §2.4 and §1.2 case 6)
+    * Tier HIGH (concept): Akamai's challenge-action API lists ``AKAMAI_WEB_CRYPTO`` with
+      ``cryptoChallengeDurationInSeconds`` (up to 120), ``challengeIntervalInSeconds``
+      (1-7200) and the Bot Manager brief describes "minimum-time-to-solve cryptographic
+      puzzles" plus an interstitial that enforces a time penalty on clients without
+      JavaScript or cookies.
+    * Tier MEDIUM (artifacts, vendor docs, one 2020 sandbox capture, one 2026 PR): scripts under
+      ``/_sec/cp_challenge/`` (``sec-cpt-<ver>.js``), a 428 Precondition Required JSON body for
+      API calls or an HTML page with an iframe ``id="sec-cpt-if"`` carrying ``provider``, a
+      base64 ``challenge`` JSON and ``data-duration``; verification at
+      ``/_sec/verify?provider=crypto|adaptive`` or ``/_sec/cp_challenge/verify``; a solved
+      challenge leaves a ``sec_cpt`` cookie containing ``~3~``. Providers: ``crypto`` (PoW plus
+      wait), ``behavioral`` (sensor data) and ``adaptive`` (both, ``count`` solutions).
+    The puzzle algorithm, challenge field values and cookie value are LAB-DEFINED; none of
+    this is Akamai's encoding.
+
+How the lab simulates it
+    * ``crypto``: find ``counter`` with ``sha256(nonce + str(counter))`` starting with
+      ``difficulty`` hex zeros, then wait until ``chlg_duration`` seconds after issue.
+    * ``adaptive``: ``count`` solutions (``nonce.i`` + counter, one lower difficulty each) AND the
+      behavioral check AND the wait.
+    * ``behavioral``: the session must have posted sensor data (``sensor:n:{sid}`` or
+      ``sensor:{sid}`` written by ``sensor_data``) and waited ``chlg_duration``; the interstitial
+      page loads the other modules' scripts so the sensor can run.
+    * ``evaluate()`` validates the ``sec_cpt`` cookie against the store (a forged or missing
+      cookie fails even if the store says solved) and re-challenges after
+      ``challenge_interval`` seconds. Settings live in the policy document (``chlg_duration``
+      default 2 s for the lab, ``challenge_interval`` default 600 s, ``adaptive_count``).
+    * A proactive solver (``/akam/proof_of_work/pow.js``, included on the landing page) runs
+      the ``crypto`` flow in the background so a real browser holds a valid ``sec_cpt`` before
+      it reaches a protected resource. Akamai does not do this; it is a LAB convenience that
+      keeps the harness's browser case meaningful.
+    * LAB-ONLY (confidence ``lab``, no known Akamai analogue): the legacy arithmetic ``simple``
+      variant (``/akam/proof_of_work/challenge?variant=simple``). Solving it alone only WARNs.
+
+How a client passes it
+    Challenge via the 428 JSON (or iframe attributes), solve, wait ``chlg_duration`` seconds,
+    ``POST /_sec/verify?provider=<p>`` with ``{"token", "answer"|"answers"}``, keep the
+    ``sec_cpt`` cookie. A pure-HTTP client can do all of this after sleeping, which is the
+    intended lesson: the wait costs time, not identity.
+
+Limits: difficulty and wait are lab constants, and the legacy routes under
+``/akam/proof_of_work/`` exist only for the harness clients (same enforcement).
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import random
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-from app.contract import DetectionModule, RequestContext, Signal, Verdict
+from app.contract import (
+    Confidence,
+    DetectionModule,
+    FlagSpec,
+    RequestContext,
+    Signal,
+    Verdict,
+)
+from app.policy import PolicyStore, clear_challenge_failures
 
-CHALLENGE_TTL = 60
 DEFAULT_DIFFICULTY = 4
+SCRIPT_NAME = "sec-cpt-1.0.js"
+SCRIPT_URL = f"/_sec/cp_challenge/{SCRIPT_NAME}"
+PROVIDERS = ("crypto", "behavioral", "adaptive")
+COOKIE = "sec_cpt"
+STATE_TTL = 3600
+# An unsolved challenge is a gray signal, not proof of automation: 45 lands in the "strict"
+# segment (challenge) for standard telemetry. A forged sec_cpt cookie is hostile: 80.
+UNSOLVED_SCORE = 45
+FORGED_SCORE = 80
 
-POW_JS = r"""(function () {
+SEC_CPT_JS = r"""(function () {
   'use strict';
-  var base = '/akam/proof_of_work';
-  function getJson(u) {
-    return fetch(u, {credentials: 'include'}).then(function (r) { return r.json(); });
-  }
-  function post(body) {
-    return fetch(base + '/verify', {
-      method: 'POST', credentials: 'include',
-      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
-    }).then(function (r) { return r.json(); });
-  }
-  function solveSimple(expr) {
-    // expression is "a op b op c" with + - * and standard precedence
-    var toks = expr.split(/\s+/), vals = [+toks[0]], ops = [];
-    for (var i = 1; i < toks.length; i += 2) {
-      if (toks[i] === '*') vals.push(vals.pop() * +toks[i + 1]);
-      else { ops.push(toks[i]); vals.push(+toks[i + 1]); }
-    }
-    var r = vals[0];
-    for (var j = 0; j < ops.length; j++) r = ops[j] === '+' ? r + vals[j + 1] : r - vals[j + 1];
-    return r;
-  }
+  // Lab-written solver (not Akamai code). Interstitial mode reads the sec-cpt-if iframe;
+  // proactive mode (landing page) fetches a crypto challenge itself.
+  var t0 = Date.now();
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function hex(buf) {
     var a = new Uint8Array(buf), s = '';
     for (var i = 0; i < a.length; i++) s += (a[i] < 16 ? '0' : '') + a[i].toString(16);
     return s;
   }
-  async function solveHard(ch) {
-    var prefix = '0'.repeat(ch.difficulty), enc = new TextEncoder(), start = 0, B = 256;
+  async function solve(nonce, difficulty) {
+    var prefix = '0'.repeat(difficulty), enc = new TextEncoder(), start = 0, B = 256;
     for (;;) {
       var jobs = [];
       for (var i = 0; i < B; i++) {
-        jobs.push(crypto.subtle.digest('SHA-256', enc.encode(ch.nonce + (start + i))));
+        jobs.push(crypto.subtle.digest('SHA-256', enc.encode(nonce + (start + i))));
       }
       var res = await Promise.all(jobs);
       for (var k = 0; k < B; k++) if (hex(res[k]).indexOf(prefix) === 0) return start + k;
@@ -63,20 +111,56 @@ POW_JS = r"""(function () {
     }
   }
   async function run() {
+    var iframe = document.getElementById('sec-cpt-if'), ch, provider, ok = false;
     try {
-      var s = await getJson(base + '/challenge?variant=simple');
-      await post({challenge_id: s.challenge_id, answer: solveSimple(s.expression)});
-      var h = await getJson(base + '/challenge?variant=hard');
-      var counter = await solveHard(h);
-      var res = await post({challenge_id: h.challenge_id, answer: counter});
-      window.__akPowOk = !!res.ok;
-    } catch (e) { window.__akPowOk = false; }
-    window.__akPowDone = true;
-    window.dispatchEvent(new CustomEvent('ak:pow'));
+      if (iframe) {
+        provider = iframe.getAttribute('provider');
+        ch = JSON.parse(atob(iframe.getAttribute('challenge')));
+      } else {
+        provider = 'crypto';
+        ch = await (await fetch('/akam/proof_of_work/challenge?provider=crypto',
+          {credentials: 'include'})).json();
+      }
+      var answers = [];
+      if (provider !== 'behavioral') {
+        var n = ch.count || 1;
+        for (var i = 0; i < n; i++) {
+          answers.push(await solve(n > 1 ? ch.nonce + '.' + i : ch.nonce, ch.difficulty));
+        }
+      }
+      var wait = ch.chlg_duration * 1000 + 300 - (Date.now() - t0);
+      if (wait > 0) await sleep(wait);
+      if (provider !== 'crypto') {  // let the sensor script post at least once
+        for (var w = 0; w < 40 && window.__akSensorDone !== true; w++) await sleep(250);
+      }
+      var r = await fetch('/_sec/verify?provider=' + provider, {
+        method: 'POST', credentials: 'include',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({token: ch.token, answers: answers})
+      });
+      ok = r.ok && (await r.json()).ok === true;
+    } catch (e) { ok = false; }
+    if (iframe) {
+      var tries = +(sessionStorage.getItem('sec_cpt_tries') || 0);
+      if (ok || tries < 3) {
+        sessionStorage.setItem('sec_cpt_tries', ok ? 0 : tries + 1);
+        location.reload();
+      }
+    } else {
+      window.__akPowOk = ok;
+      window.__akPowDone = true;
+      window.dispatchEvent(new CustomEvent('ak:pow'));
+    }
   }
   run();
 })();
 """
+
+MESSAGE_HTML = (
+    "<!doctype html><html><head><meta charset=utf-8></head>"
+    '<body style="font-family:system-ui,sans-serif;text-align:center;margin-top:3rem">'
+    "<p>Checking your browser&hellip;</p></body></html>"
+)
 
 
 def eval_expression(expr: str) -> int:
@@ -104,127 +188,329 @@ def hard_ok(nonce: str, counter: str, difficulty: int) -> bool:
     return digest.startswith("0" * difficulty)
 
 
+def sub_nonce(nonce: str, index: int, count: int) -> str:
+    """Single solution uses the nonce as is; adaptive solution ``i`` uses ``nonce.i``."""
+    return nonce if count == 1 else f"{nonce}.{index}"
+
+
+@dataclass
+class Settings:
+    duration: float
+    interval: int
+    timeout: int
+    adaptive_count: int
+    difficulty: int
+
+
 class ProofOfWork(DetectionModule):
     slug: ClassVar[str] = "proof_of_work"
     title: ClassVar[str] = "Proof of work interstitial"
     description: ClassVar[str] = (
-        "sec_cpt-style challenge: client must solve a sha256 proof of work (hard) "
-        "bound to its session; the legacy arithmetic variant alone only warns."
+        "sec_cpt-style challenge: crypto / behavioral / adaptive providers, a minimum solve "
+        "duration (chlg_duration), 428 JSON or iframe interstitial, validated sec_cpt cookie "
+        "and a re-challenge interval. Artifacts are MEDIUM-confidence approximations."
     )
     category: ClassVar[str] = "js"
+    confidence: ClassVar[Confidence] = Confidence.MEDIUM
     client_scripts: ClassVar[list[str]] = ["pow.js"]
+    challenge_providers: ClassVar[frozenset[str]] = frozenset(PROVIDERS)
+    flags: ClassVar[list[FlagSpec]] = []
 
     def __init__(
         self,
         rng: random.Random | None = None,
         clock: Callable[[], float] = time.time,
-        difficulty: int = DEFAULT_DIFFICULTY,
+        difficulty: int | None = None,
+        duration: float | None = None,
+        interval: int | None = None,
+        timeout: int | None = None,
+        adaptive_count: int | None = None,
     ) -> None:
         self.rng = rng or random.Random()
         self.clock = clock
-        self.difficulty = difficulty
+        self._overrides: dict[str, Any] = {
+            "difficulty": difficulty,
+            "duration": duration,
+            "interval": interval,
+            "timeout": timeout,
+            "adaptive_count": adaptive_count,
+        }
+
+    async def settings(self, store: Any) -> Settings:
+        p = (await PolicyStore(store).get()).params
+        base: dict[str, Any] = {
+            "difficulty": DEFAULT_DIFFICULTY,
+            "duration": p.chlg_duration,
+            "interval": p.challenge_interval,
+            "timeout": p.challenge_timeout,
+            "adaptive_count": p.adaptive_count,
+        }
+        base.update({k: v for k, v in self._overrides.items() if v is not None})
+        return Settings(**base)
+
+    # -- verdict -------------------------------------------------------------------------
+    async def _state(self, ctx: RequestContext) -> tuple[str, dict[str, Any]]:
+        """('ok'|'forged'|'missing'|'expired'|'simple'|'none', details) for this session."""
+        sid = ctx.session_id
+        raw = await ctx.store.get(f"pow:{sid}") if sid else None
+        if raw:
+            rec = json.loads(raw)
+            cookie = ctx.cookies.get(COOKIE, "")
+            if not cookie:
+                return "missing", {}
+            if "~3~" not in cookie or cookie != rec.get("cookie"):
+                return "forged", {}
+            interval = (await self.settings(ctx.store)).interval
+            age = self.clock() - float(rec["solved_at"])
+            if age > interval:
+                return "expired", {"age": round(age, 1), "interval": interval}
+            return "ok", {"provider": rec.get("provider"), "age": round(age, 1)}
+        if sid and await ctx.store.get(f"pow:simple:{sid}") == "ok":
+            return "simple", {}
+        return "none", {}
 
     async def evaluate(self, ctx: RequestContext) -> Signal:
-        sid = ctx.session_id
-        if sid and await ctx.store.get(f"pow:{sid}") == "ok":
-            return self.signal(Verdict.PASS, 0, "hard proof of work solved")
-        if sid and await ctx.store.get(f"pow:simple:{sid}") == "ok":
-            return self.signal(Verdict.WARN, 30, "only the legacy arithmetic challenge was solved")
-        return self.signal(Verdict.FAIL, 80, "no proof of work solved for this session")
+        state, d = await self._state(ctx)
+        if state == "ok":
+            return self.signal(Verdict.PASS, 0, "proof of work solved, sec_cpt cookie valid", **d)
+        if state == "forged":
+            return self.signal(
+                Verdict.FAIL, FORGED_SCORE, "sec_cpt cookie is not the one issued (forged?)", **d
+            )
+        if state == "missing":
+            return self.signal(
+                Verdict.FAIL, UNSOLVED_SCORE, "solved, but the sec_cpt cookie was not presented"
+            )
+        if state == "expired":
+            return self.signal(
+                Verdict.FAIL,
+                UNSOLVED_SCORE,
+                "challenge interval elapsed, the session must solve again",
+                rechallenge=True,
+                **d,
+            )
+        if state == "simple":
+            return self.signal(
+                Verdict.WARN, 30, "only the LAB-only arithmetic challenge was solved"
+            )
+        return self.signal(Verdict.FAIL, UNSOLVED_SCORE, "no proof of work solved for this session")
 
-    # -- challenge generation -------------------------------------------------
-    def make_challenge(self, sid: str, variant: str) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return (public payload, private record)."""
-        cid = uuid.UUID(int=self.rng.getrandbits(128), version=4).hex
+    async def challenge_satisfied(self, ctx: RequestContext, provider: str | None = None) -> bool:
+        return (await self._state(ctx))[0] == "ok"
+
+    # -- challenge generation ------------------------------------------------------------
+    async def make_challenge(
+        self, store: Any, sid: str, provider: str, variant: str = "hard"
+    ) -> dict[str, Any]:
+        """Create and persist a challenge; return the public payload (token = challenge_id)."""
+        cfg = await self.settings(store)
+        token = uuid.UUID(int=self.rng.getrandbits(128), version=4).hex
         now = self.clock()
         public: dict[str, Any] = {
-            "challenge_id": cid,
+            "provider": provider,
+            "token": token,
+            "challenge_id": token,  # legacy alias
+            "timestamp": int(now),
+            "timeout": cfg.timeout,
+            "chlg_duration": cfg.duration,
             "variant": variant,
-            "expires_in": CHALLENGE_TTL,
+            "expires_in": cfg.timeout,
         }
-        record: dict[str, Any] = {"sid": sid, "variant": variant, "ts": now}
+        record: dict[str, Any] = {
+            "sid": sid,
+            "provider": provider,
+            "variant": variant,
+            "issued_at": now,
+            "chlg_duration": cfg.duration,
+            "timeout": cfg.timeout,
+        }
         if variant == "simple":
             n = [self.rng.randint(2, 99) for _ in range(3)]
             ops = [self.rng.choice("+-*") for _ in range(2)]
             expr = f"{n[0]} {ops[0]} {n[1]} {ops[1]} {n[2]}"
-            public.update(expression=expr, nonce=None, difficulty=0)
+            public.update(
+                expression=expr,
+                nonce=None,
+                difficulty=0,
+                lab_only=True,
+                note="LAB-only arithmetic variant; no known Akamai analogue",
+            )
             record["answer"] = eval_expression(expr)
         else:
+            count = cfg.adaptive_count if provider == "adaptive" else 1
+            difficulty = max(1, cfg.difficulty - 1) if count > 1 else cfg.difficulty
             nonce = f"{self.rng.getrandbits(64):016x}"
-            public.update(
-                nonce=nonce,
-                difficulty=self.difficulty,
-                algo="sha256(nonce + str(counter)) hex starts with `difficulty` zeros",
-            )
-            record.update(nonce=nonce, difficulty=self.difficulty)
-        return public, record
+            record.update(nonce=nonce, difficulty=difficulty, count=count)
+            if provider != "behavioral":  # behavioral has nothing to compute
+                public.update(nonce=nonce, difficulty=difficulty)
+                public["algo"] = "sha256(nonce + str(counter)) hex starts with `difficulty` zeros"
+            if provider == "adaptive":
+                public["count"] = count
+        await store.set(f"pow:ch:{token}", json.dumps(record), ttl=cfg.timeout + 5)
+        return public
 
-    async def check(self, store: Any, sid: str, cid: str, answer: Any) -> tuple[bool, str, str]:
-        """Consume challenge ``cid``. Returns (ok, reason, variant)."""
-        key = f"pow:ch:{cid}"
+    async def _sensor_posts(self, store: Any, sid: str) -> int:
+        n = await store.get(f"sensor:n:{sid}")
+        if n and str(n).isdigit() and int(n) > 0:
+            return int(n)
+        return 1 if await store.get(f"sensor:{sid}") else 0
+
+    async def check(
+        self, store: Any, sid: str, token: str, body: dict[str, Any], provider: str | None = None
+    ) -> tuple[bool, str, dict[str, Any]]:
+        """Consume challenge ``token``. Returns (ok, reason, record)."""
+        key = f"pow:ch:{token}"
         raw = await store.get(key)
         if raw is None:
-            return False, "unknown_or_replayed", ""
+            return False, "unknown_or_replayed", {}
         await store.delete(key)  # single use, even on failure
         rec = json.loads(raw)
-        variant = rec["variant"]
         if rec["sid"] != sid:
-            return False, "wrong_session", variant
-        if self.clock() - rec["ts"] > CHALLENGE_TTL:
-            return False, "expired", variant
+            return False, "wrong_session", rec
+        if provider and provider != rec["provider"] and rec["variant"] == "hard":
+            return False, "wrong_provider", rec
+        elapsed = self.clock() - rec["issued_at"]
+        if elapsed > rec["timeout"]:
+            return False, "expired", rec
         try:
-            if variant == "simple":
-                ok = int(answer) == rec["answer"]
+            if rec["variant"] == "simple":
+                ok = int(body["answer"]) == rec["answer"]
+            elif rec["provider"] == "behavioral":
+                ok = True
             else:
-                ok = hard_ok(rec["nonce"], str(int(answer)), rec["difficulty"])
-        except (TypeError, ValueError):
-            return False, "bad_answer", variant
-        return (ok, "ok" if ok else "wrong_answer", variant)
+                answers = body.get("answers") or [body["answer"]]
+                count = int(rec["count"])
+                ok = len(answers) == count and all(
+                    hard_ok(sub_nonce(rec["nonce"], i, count), str(int(a)), rec["difficulty"])
+                    for i, a in enumerate(answers)
+                )
+        except (TypeError, ValueError, KeyError):
+            return False, "bad_answer", rec
+        if not ok:
+            return False, "wrong_answer", rec
+        if rec["variant"] == "hard" and elapsed < rec["chlg_duration"]:
+            return False, "too_early", {**rec, "retry_after": rec["chlg_duration"] - elapsed}
+        if rec["provider"] in ("behavioral", "adaptive") and not await self._sensor_posts(
+            store, sid
+        ):
+            return False, "no_sensor", rec
+        return True, "ok", rec
+
+    async def accept(self, store: Any, sid: str, rec: dict[str, Any]) -> Response:
+        """Record a solved challenge and build the success response (with ``sec_cpt``)."""
+        resp = JSONResponse({"ok": True, "variant": rec["variant"], "provider": rec["provider"]})
+        if rec["variant"] == "simple":
+            await store.set(f"pow:simple:{sid}", "ok", ttl=STATE_TTL)
+            return resp
+        now = self.clock()
+        cookie = f"{self.rng.getrandbits(128):032X}~3~{int(now)}"
+        await store.set(
+            f"pow:{sid}",
+            json.dumps({"cookie": cookie, "solved_at": now, "provider": rec["provider"]}),
+            ttl=STATE_TTL,
+        )
+        await clear_challenge_failures(store, sid)
+        resp.set_cookie(COOKIE, cookie, path="/", samesite="lax")
+        return resp
+
+    # -- challenge action ----------------------------------------------------------------
+    async def issue_challenge(
+        self, request: Request, ctx: RequestContext, provider: str, *, html: bool
+    ) -> Response | None:
+        if provider not in PROVIDERS:
+            return None
+        public = await self.make_challenge(ctx.store, ctx.session_id, provider)
+        public.pop("challenge_id", None)
+        public.pop("variant", None)
+        public.pop("expires_in", None)
+        headers = {"Cache-Control": "no-store"}
+        if not html:
+            return JSONResponse(public, status_code=428, headers=headers)
+        encoded = base64.b64encode(json.dumps(public, separators=(",", ":")).encode()).decode()
+        page = (
+            "<!doctype html><html><head><meta charset=utf-8>"
+            "<title>Checking your browser</title></head><body>"
+            f'<iframe id="sec-cpt-if" provider="{provider}" challenge="{encoded}" '
+            f'data-duration="{public["chlg_duration"]:g}" '
+            f'src="/_sec/cp_challenge/message.htm?provider={provider}" '
+            'style="border:0;width:100%;height:12rem"></iframe>'
+            f'<script src="{SCRIPT_URL}"></script></body></html>'
+        )
+        return HTMLResponse(page, headers=headers)
+
+    # -- routes --------------------------------------------------------------------------
+    async def _verify(self, request: Request, provider: str | None) -> Response:
+        sid = request.cookies.get("bm_sz", "")
+        try:
+            body = await request.json()
+            token = str(body.get("token") or body["challenge_id"])
+            if not isinstance(body, dict):
+                raise TypeError
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return JSONResponse({"ok": False, "error": "bad_request"}, status_code=400)
+        if not sid:
+            return JSONResponse({"ok": False, "error": "no_session"}, status_code=400)
+        store = request.app.state.store
+        ok, reason, rec = await self.check(store, sid, token, body, provider)
+        if not ok:
+            extra = {"retry_after": round(rec["retry_after"], 2)} if "retry_after" in rec else {}
+            return JSONResponse({"ok": False, "error": reason, **extra}, status_code=403)
+        return await self.accept(store, sid, rec)
+
+    def root_router(self) -> APIRouter:
+        """Vendor-style absolute paths (report §1.2 case 6, tier MEDIUM)."""
+        r = APIRouter()
+
+        @r.post("/_sec/verify")
+        async def sec_verify(request: Request, provider: str | None = None) -> Response:
+            return await self._verify(request, provider)
+
+        @r.post("/_sec/cp_challenge/verify")
+        async def cp_verify(request: Request, provider: str | None = None) -> Response:
+            return await self._verify(request, provider)
+
+        @r.get(f"/_sec/cp_challenge/{SCRIPT_NAME}")
+        async def script() -> Response:
+            return Response(
+                SEC_CPT_JS,
+                media_type="application/javascript",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        @r.get("/_sec/cp_challenge/message.htm")
+        async def message() -> Response:
+            return HTMLResponse(MESSAGE_HTML)
+
+        return r
 
     def router(self) -> APIRouter:
+        """Legacy lab routes under ``/akam/proof_of_work/`` (same enforcement)."""
         r = APIRouter()
 
         @r.get("/challenge")
-        async def challenge(request: Request, variant: str = "hard") -> Response:
+        async def challenge(
+            request: Request, variant: str = "hard", provider: str = "crypto"
+        ) -> Response:
             sid = request.cookies.get("bm_sz", "")
             if not sid:
                 return JSONResponse({"error": "no_session"}, status_code=400)
             if variant not in ("simple", "hard"):
                 return JSONResponse({"error": "bad_variant"}, status_code=400)
-            public, rec = self.make_challenge(sid, variant)
-            await request.app.state.store.set(
-                f"pow:ch:{public['challenge_id']}", json.dumps(rec), ttl=CHALLENGE_TTL + 5
-            )
+            if provider not in PROVIDERS:
+                return JSONResponse({"error": "bad_provider"}, status_code=400)
+            public = await self.make_challenge(request.app.state.store, sid, provider, variant)
             return JSONResponse(public, headers={"Cache-Control": "no-store"})
 
         @r.post("/verify")
         async def verify(request: Request) -> Response:
-            sid = request.cookies.get("bm_sz", "")
-            try:
-                body = await request.json()
-                cid = str(body["challenge_id"])
-                answer = body["answer"]
-            except (ValueError, KeyError, TypeError):
-                return JSONResponse({"ok": False, "error": "bad_request"}, status_code=400)
-            store = request.app.state.store
-            if not sid:
-                return JSONResponse({"ok": False, "error": "no_session"}, status_code=400)
-            ok, reason, variant = await self.check(store, sid, cid, answer)
-            if not ok:
-                return JSONResponse({"ok": False, "error": reason}, status_code=403)
-            await store.set(
-                f"pow:{sid}" if variant == "hard" else f"pow:simple:{sid}", "ok", ttl=3600
-            )
-            resp = JSONResponse({"ok": True, "variant": variant})
-            ts = int(self.clock())
-            cookie = f"{self.rng.getrandbits(128):032x}~3~{ts}"
-            resp.set_cookie("sec_cpt", cookie, path="/", samesite="lax")
-            return resp
+            return await self._verify(request, None)
 
         @r.get("/pow.js")
         async def pow_js() -> Response:
             return Response(
-                POW_JS, media_type="application/javascript", headers={"Cache-Control": "no-store"}
+                SEC_CPT_JS,
+                media_type="application/javascript",
+                headers={"Cache-Control": "no-store"},
             )
 
         return r
