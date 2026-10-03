@@ -84,3 +84,9 @@ transport, not UA brand) — Playwright client may override UA to normal Chrome 
 Python 3.12, fully typed, ruff (config in root pyproject.toml), pytest under `api/tests/`
 (`test_<slug>.py` per module). Conventional Commits; commit only your own files
 (`git add <your paths>`; if `.git/index.lock` exists, wait a second and retry).
+
+## Client scripts
+A module that needs JS in the browser declares an OPTIONAL class attribute
+`client_scripts: ClassVar[list[str]] = []` — paths relative to `/akam/<slug>/` (e.g.
+`["sensor.js"]` -> `/akam/<slug>/sensor.js`). The core landing page `/` and the HTML 403
+interstitial include one `<script src>` per entry, for every registered module.
