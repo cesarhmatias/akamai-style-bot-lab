@@ -18,7 +18,8 @@ off) or labels the behaviour as an approximation, and the case doc says which.
 3. **The sensor payload's current version prefix**, and whether a given site uses standard or inline telemetry (look for
    `akamai-bm-telemetry` on XHR).
 4. **SBSD:** the script URL, the body shape, the cookies, and passive versus blocking behaviour.
-5. **sec-cpt:** 428 versus 200, the provider, `chlg_duration` values, and the verify path.
+5. **sec-cpt:** 428 versus 200, the provider, `chlg_duration` values, and the verify path. For the `bm-verify` interstitial,
+   whether the verify response ever carries a JSON `location` (see section 4).
 6. **The behavioral challenge's DOM** and the events it records.
 7. **The pixel POST body**, and which cookie changes afterwards.
 8. **Deny responses:** the `Server` header, `Mime-Version`, and the reference format. Tarpit and serve-alternate are hard to
@@ -50,6 +51,7 @@ Akamai analogue.
 | HTTP/3 fingerprinting by Akamai | **nothing** (see deferred features) | none |
 | Detection names "Cookie Integrity Failed", "Session Validation", "Browser Validation" | not used as names; `session_validation` is a lab approximation | none |
 | SBSD is part of Content Protector | speculation; not modelled | none |
+| JSON `location` in the interstitial verify response (audit §3.1, Low) | optional, same-origin only, and clients must not depend on it (see section 4) | none |
 
 ## 3. Deferred features (deliberately not built)
 
@@ -68,6 +70,13 @@ Akamai analogue.
 | **High-entropy client-hint negotiation** (`Accept-CH`, `Critical-CH`) | The lab does not request hints; `header_order` and `version_consistency` use what the browser sends by default. |
 | **HEADERS-frame priority scoring** | The edge records `x-h2-headers-priority` and `h2_fingerprint` echoes it in `details`, but it is outside Akamai's string and not scored. |
 | **Real Akamai payload, cookie and script encodings** | Never copied: artifact *shapes* are modelled, encodings are lab-defined. |
+
+## 4. Interstitial (`bm-verify`) specifics
+
+- **`location` in the verify response is unconfirmed.** Published sources show the interstitial clearing the session by
+  reloading the page, or by a `<meta http-equiv="refresh">` that carries a single-use `bm-verify` token. None shows a JSON
+  `location` field in the `/_sec/verify?provider=interstitial` response. The lab may return one as an optional convenience;
+  clients should not depend on it, and any client that follows it must reject cross-origin targets.
 
 ## How to close a gap without leaving the project's boundaries
 

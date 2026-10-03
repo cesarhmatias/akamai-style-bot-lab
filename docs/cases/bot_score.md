@@ -77,12 +77,13 @@ class. `ScoreReport.blocked` is true exactly when the action is `deny`, `tarpit`
 | `slow` | stream the body in `slow_chunks` (6) chunks over `slow_seconds` (default 3, `LAB_SLOW_SECONDS`) |
 | `tarpit` | hold the connection `tarpit_seconds` (default 5, `LAB_TARPIT_SECONDS`), then an empty 403 |
 | `serve_alternate` | HTTP 200 with subtly wrong data and a canary (below) |
-| `challenge` | the policy's `challenge_provider` (`crypto` by default; the choices are `crypto`, `behavioral`, `adaptive` and `interactive`): 428 JSON for XHR/API callers, an interstitial page for navigations; with no provider able to issue it, a 428 `no_challenge_provider` |
+| `challenge` | the policy's `challenge_provider` (`crypto` by default; the choices are `crypto`, `behavioral`, `adaptive`, `interactive` and `interstitial`): 428 JSON for XHR/API callers, an interstitial page for navigations; with no provider able to issue it, a 428 `no_challenge_provider` |
 | `deny` | the deny page (below) |
 | `safeguard` | let the session through under monitoring |
 
-**Challenge handling**: if any enabled challenge provider reports the session already solved a challenge (valid cookie and
-store state), the engine downgrades `challenge` to `monitor` instead of looping. Otherwise `decide_challenge` records the
+**Challenge handling**: if a module serving the requested provider reports the session already solved its challenge (valid
+cookie and store state), the engine downgrades `challenge` to `monitor` instead of looping. The check is per provider: a
+solved crypto challenge does not waive the tile game, and a solved interstitial satisfies only `interstitial`. Otherwise `decide_challenge` records the
 challenge in a sliding window (`chlg:fail:{sid}`); after `safeguard_failures` (3) challenges inside
 `safeguard_window_seconds` (600) with no solve, the next one becomes `safeguard` (`is_safeguard = true`, no provider, a pass
 under monitoring for the same window, `safeguard:{sid}`), so a human is never trapped forever. A solve clears the counters.

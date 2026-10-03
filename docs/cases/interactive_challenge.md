@@ -63,9 +63,11 @@ pointer path (the Playwright harness client does); calling `element.click()` or 
 | curl_cffi | fail | fail 45, same (needs trusted pointer events) |
 | Playwright | pass | pass 0, "interactive challenge solved, no re-challenge yet" (a curved, jittered path in a fresh session) |
 
-The engine downgrades a `challenge` to monitor when a challenge provider reports the session solved, so a session that
-already earned a valid `sec_cpt` from the landing page's proactive solver is never shown the tile game; the harness runs
-the Playwright case in a fresh browser session for that reason.
+The engine downgrades a `challenge` to monitor only when a module that serves the policy's `challenge_provider` reports the
+session solved it (the engine passes the provider to `challenge_satisfied`). The tile game vouches for `interactive` and
+`behavioral`; a `sec_cpt` earned from the landing page's proactive solver no longer waives it, so in the working-tree
+`RESULTS.md` curl_cffi's row is `challenge/strict` (the committed one reads `monitor/strict`, from the earlier any-provider
+rule). The harness still runs the Playwright case in a fresh browser session.
 
 ## Limits and caveats
 

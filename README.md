@@ -84,7 +84,7 @@ tier, the exact checks, how a scraper passes it and the observed results. Tiers 
 | [js_integrity](docs/cases/js_integrity.md) | js | HIGH | on | native getters, `webdriver`, headless markers, automation globals |
 | [session_validation](docs/cases/session_validation.md) | behavioral | MEDIUM | on | page navigations vs XHR chain per session |
 | [behavioral](docs/cases/behavioral.md) | behavioral | HIGH | on | mouse, keyboard, touch and motion telemetry |
-| [proof_of_work](docs/cases/proof_of_work.md) | js | MEDIUM | on | `sec_cpt` providers, minimum solve time, 428 vs iframe |
+| [proof_of_work](docs/cases/proof_of_work.md) | js | MEDIUM | on | `sec_cpt` providers, minimum solve time, 428 vs iframe, cookieless `bm-verify` interstitial |
 | [pixel_challenge](docs/cases/pixel_challenge.md) | js | MEDIUM | on | value in the HTML posted to `/akam/<n>/pixel_<hex>` |
 | [sbsd_challenge](docs/cases/sbsd_challenge.md) | js | LOW | on (lab device) | per-issuance JS op chain; vendor flow behind `sbsd_vendor_flow` |
 | [interactive_challenge](docs/cases/interactive_challenge.md) | behavioral | MEDIUM | on | tile mini-game, AJAX challenge injection |
@@ -124,11 +124,17 @@ per-signal reasons, how a failing client would pass, and the before/after note f
 | inline_telemetry | checkout | ❌ | ❌ | ✅ |
 | account_protector | login | ✅ | ✅ | ✅ |
 | native_app | mobile | ❌ | ✅ | ❌ |
+| pow_interstitial | interstitial | ❌ | ⚠️ | ⚠️ |
+| pow_interstitial_hardened | interstitial | ❌ | ❌ | ⚠️ |
 
 - **naive**: plain `requests`, no scripts. **curl_cffi**: Chrome 131 impersonation (pinned, about 23 majors old),
   solves proof of work and pixel in pure Python, runs no JS. **playwright**: headless Chromium with a UA override
   to Chrome/131, a masked `navigator.webdriver` and a seeded Bezier mouse path; the new version and integrity checks
   catch both overrides.
+- **pow_interstitial** rows: the cookieless `bm-verify` arithmetic interstitial (flag `pow_cookieless_gate`, plus the LAB flag
+  `pow_interstitial_hardened` for the second row). A regex-only curl_cffi solves the basic page (⚠️: solving it is weak evidence,
+  WARN 30) and is stopped by the randomized hardened shape (❌); Playwright runs the page's own script (⚠️). See
+  [proof_of_work](docs/cases/proof_of_work.md#cookieless-bm-verify-interstitial).
 - The Playwright and curl_cffi versions are pinned in `pyproject.toml` because the Playwright JA4 depends on the bundled
   Chromium build.
 
@@ -162,6 +168,8 @@ environment variable `LAB_FLAG_<NAME>`, then the default. `GET /api/flags` lists
 | `rate_id_ip_useragent` | off | high | `ip_reputation` | rate-control identifier = IP + User-Agent |
 | `rate_id_tls_fingerprint` | off | high | `ip_reputation` | rate-control identifier = JA4 |
 | `akamai_ghost_server_header` | **on** | medium | engine | send `Server: AkamaiGHost` on deny pages |
+| `pow_cookieless_gate` | off | medium | `proof_of_work` | serve the `bm-verify` interstitial to navigations without `bm_sz`/`_abck` |
+| `pow_interstitial_hardened` | off | lab | `proof_of_work` | randomize the interstitial's arithmetic shape (lab device) |
 | `abck_tilde0_mode` | off | low | `abck_cookie` | `_abck` flips to `~0~`; a forged `~0~` is a BLOCK |
 | `abck_n_posts` | off | low | `abck_cookie` | validity needs N sensor posts (default 3) |
 | `ak_bmsc_httponly` | off | low | `pixel_challenge` | issue `ak_bmsc` HttpOnly |

@@ -1,7 +1,7 @@
 # `proof_of_work`: `sec_cpt`-style challenge providers
 
 Category: js · Module: `api/app/modules/proof_of_work.py` · Protected URL: `/protected/proof_of_work` · Default: on
-· Module tier: **MEDIUM** (artifacts are approximations; the free-form `simple` variant is a LAB device)
+· Module tier: **MEDIUM** (artifacts are approximations; the cookieless `bm-verify` interstitial is MEDIUM; the free-form `simple` variant and the hardened interstitial are LAB devices)
 
 ## What it is
 
@@ -32,9 +32,13 @@ answer that arrives before `chlg_duration` seconds have passed is rejected. Thre
 | Challenge types, `chlg_duration` minimum wait, `challengeInterval`, interstitial with time penalty (concept) | HIGH (Akamai API 2026 and brief 2023) |
 | 428 JSON, `sec-cpt-if` iframe, `/_sec/` verify paths, providers, `~3~` cookie | MEDIUM (approximation: vendor docs, a 2020 sandbox capture, a 2026 PR) |
 | Free-form `a op b op c` arithmetic (`variant=simple`) | LAB: a teaching device kept for the harness |
+| Cookieless `bm-verify` interstitial (arithmetic `pow`, `/_sec/verify?provider=interstitial`, cookies on success) | MEDIUM (approximation; see the interstitial section) |
+| JSON `location` in the interstitial verify response | LOW: unverified; optional, same-origin only |
+| Randomized interstitial shape | LAB, flag `pow_interstitial_hardened` (off) |
+| Cookieless gate on first visits | MEDIUM, flag `pow_cookieless_gate` (off, because it changes every client's first visit) |
 
-No flags in the committed behaviour. Whether verify returns 428 vs 200 and the `chlg_duration` values on real sites are
-unverified ([KNOWN_GAPS](../KNOWN_GAPS.md) item 5).
+Flags: `pow_cookieless_gate` and `pow_interstitial_hardened`, both default off. Whether verify returns 428 vs 200 and the
+`chlg_duration` values on real sites are unverified ([KNOWN_GAPS](../KNOWN_GAPS.md) item 5).
 
 ## How the lab simulates it
 
@@ -93,8 +97,105 @@ do all of this after sleeping, which is the intended lesson: the wait costs time
 | curl_cffi | pass | pass 0, "proof of work solved, sec_cpt cookie valid" (hard proof of work over HTTP with the minimum wait, then verify) |
 | Playwright | pass | pass 0, same reason (the landing page's proactive solver) |
 
+The interstitial rows (`pow_interstitial`, `pow_interstitial_hardened`) are covered in the section below.
+
 ## Limits and caveats
 
 - Difficulty and wait are lab constants and settings; the legacy `/akam/proof_of_work/` routes exist for the harness clients.
 - The proactive solver and the `simple` variant are lab devices with no Akamai counterpart.
 - See `interactive_challenge` for the tile game that shares the engine's "already solved" downgrade.
+
+## Cookieless `bm-verify` interstitial
+
+### What it models
+
+The Bot Manager brief describes an interstitial challenge that "requires clients to prove they support storing cookies and
+executing JavaScript" ([P], 10/2023). The corrected audit (report §1.2 case 6, correction of 2026-10-02) found two independent
+2026 sources that describe the same artifact, so the lab's arithmetic page is **not** a lab-only invention and must not be
+deleted on that basis ([S]: the bershka-scraper README, measured 2026-09-19 to 09-22; sugarplum issue #172 and PR #177,
+2026-09-27):
+
+- a cookieless client gets HTTP 200 (about 2.1-2.4 KB) with a `bm-verify` token and one line of arithmetic, for example
+  `var i = 1789910678; var j = i + Number("3886" + "11036");`;
+- the page's script POSTs `{"bm-verify": token, "pow": i + 388611036}` to `/_sec/verify?provider=interstitial` and reloads;
+- the success response sets `_abck` and `bm_sz` alongside `ak_bmsc`, and the cleared session keeps getting the real page; the
+  token is one-shot.
+
+Tier **MEDIUM** (concept [P]; artifacts from two independent secondary sources, plus an unpublished observation from the
+lab owner's own HAR-derived client that matches the same shape). Akamai's real page wording and the cookie-issuing step are
+approximated. A JSON `location` in the verify reply is **LOW**: only that unpublished client tolerates one; the published
+sources show a reload or a `<meta http-equiv="refresh">` carrying a single-use token ([KNOWN_GAPS](../KNOWN_GAPS.md), section 4).
+
+### How the lab simulates it
+
+- **Page**: `interstitial` provider (or the gate below) answers an HTML page, HTTP 200, titled "Checking your browser", whose
+  inline script computes the arithmetic and POSTs the result. For XHR the provider answers a 428 JSON carrying the same
+  `bm-verify`, `expression` and `hardened` fields. The page is lab-written markup, not Akamai's.
+- **The arithmetic is data**: the basic form is `var i = <1000-9999>; var j = i + Number("<AB>" + "<CD>");` (two two-digit
+  parts). The server stores the spec (`i` and the digit parts) with the challenge and computes the expected `pow = i +
+  int(parts)` from it, never from the page text and never with `eval`.
+- **Token**: `bm-verify` is the challenge token: single use (consumed even on failure), bound to `bm_sz`, valid for
+  `challenge_timeout` (60 s). Failures are the other variants' reasons: `unknown_or_replayed`, `wrong_session`, `expired`,
+  `wrong_provider`, `bad_answer`, `wrong_answer`. There is no minimum wait for this variant (the `chlg_duration` wait applies
+  to the hard proof of work only).
+- **Verify routes**: `POST /_sec/verify?provider=interstitial` (the vendor-style absolute path, mounted by `root_router`, the
+  same path the public sources show and the one `crypto` and `adaptive` already use) and the lab alias
+  `POST /akam/proof_of_work/interstitial/verify`. The alias exists because every module's own routes live under
+  `/akam/<slug>/` (as do the legacy `challenge`, `verify` and `pow.js` routes and the on-demand page below), so lab and
+  harness clients get a namespaced path with identical enforcement (both call the same `_verify`). Body
+  `{"bm-verify": token, "pow": int}`.
+- **On success**: `pow:interstitial:{sid}` is stored (3600 s) and the lab issues or refreshes `bm_sz`, `ak_bmsc` and `_abck`
+  through its own cookie issuance (`main.finalize_cookies`). It does **not** set `sec_cpt` and does **not** mark `_abck`
+  validated (that still needs the sensor flow).
+- **On-demand page**: `GET /akam/proof_of_work/interstitial?return_to=<path>` serves the page without waiting for a policy
+  decision (used by the harness). The legacy `GET /akam/proof_of_work/challenge?variant=interstitial` returns the same
+  challenge as JSON.
+- **`location` and why it is same-origin only**: the verify reply may carry `location`, the path of the request that was
+  challenged (`return_to`), and only when `safe_location` accepts it: a plain absolute path, nothing with a scheme or
+  netloc, no `//host`, no backslash, no control characters. Anything else is dropped, so a crafted `return_to` cannot turn the
+  page into an open redirect. The page script applies the same check before `location.replace(...)`. When there is no
+  `location`: on the on-demand route it goes to `/` (reloading that route would only issue a fresh interstitial), anywhere
+  else it reloads the page. Clients must not depend on `location`, and a client that follows it must reject cross-origin
+  targets.
+- **Gate** (flag `pow_cookieless_gate`, MEDIUM, default **off**): a `pre_request` hook that serves this page to a GET navigation
+  (`Accept` contains `text/html`) that is missing `bm_sz` or `_abck`. It is off because it changes every client's
+  first visit.
+- **Hardened variant** (flag `pow_interstitial_hardened`, **LAB**, default off): randomizes the arithmetic shape per issuance
+  (identifier names, two to four concatenated string parts, operand order, whitespace, quote style, `Number(...)` /
+  `parseInt(..., 10)` / unary plus, a decimal or hex `i`, `var` or `let`, an optional decoy declaration), so a fixed regex such
+  as `var\s+j\s*=\s*i\s*\+\s*Number\("(\d+)"\s*\+\s*"(\d+)"\)` stops matching and only a client that interprets the
+  script answers correctly. It is a lab device, not an Akamai feature, and a determined solver can still interpret the script.
+- **Scoring and why solving it only WARNs**: a fixed regex solves the basic page without running any JavaScript, so a solved
+  interstitial is weak evidence: **WARN 30** ("only the basic arithmetic interstitial was solved (a regex can do that)"),
+  never PASS. Precedence is hard proof of work (pass 0), then interstitial or `simple` (warn 30), then nothing (fail 45). The
+  `challenge_provider` default stays `crypto`, so a session that solved only the interstitial is still challenged on protected
+  resources.
+- **Provider scoping**: the engine now asks `challenge_satisfied(ctx, provider)`. This module vouches only for providers it
+  serves, and a solved interstitial satisfies only the `interstitial` provider (a valid `sec_cpt` satisfies any provider this
+  module serves). A crypto `sec_cpt` no longer waives another module's challenge, for example the tile game. `interstitial` is
+  an accepted `challenge_provider` value in the policy.
+
+### How a scraper passes it
+
+Parse the token and the two statements from the page, compute `i + int(A + B)`, `POST {"bm-verify", "pow"}` to
+`/_sec/verify?provider=interstitial` with the same cookie jar, follow a same-origin `location` if one is returned (otherwise
+request the page again), and keep the cookies. Regexes are enough for the basic page and give WARN 30 at best; the hardened
+page needs a JavaScript engine or a robust JS parser. Only the hard proof of work reaches PASS.
+
+### Observed results
+
+From the working-tree `RESULTS.md`. The runner turns `pow_cookieless_gate` on for both rows and `pow_interstitial_hardened` on
+for the second, in a fresh session per client, and judges the `proof_of_work` signal after the attempt.
+
+| Row | naive | curl_cffi (regexes only) | Playwright |
+|---|---|---|---|
+| `pow_interstitial` | fail 45, "no proof of work solved for this session" (not attempted) | **warn 30**, "only the basic arithmetic interstitial was solved (a regex can do that)"; verify accepted, followed `location` | **warn 30**, same reason; the page's own script ran and verify was accepted |
+| `pow_interstitial_hardened` | fail 45 (not attempted) | **fail 45**, "no proof of work solved for this session"; the regexes did not match the hardened script, so it stopped | **warn 30**, same reason as the basic row (a browser interprets the script) |
+
+Cells in the matrix: `pow_interstitial` naive ❌, curl_cffi ⚠️, Playwright ⚠️; `pow_interstitial_hardened` naive ❌, curl_cffi ❌,
+Playwright ⚠️.
+
+### Limits
+
+`location` is unconfirmed (LOW). The page wording and the cookie-issuing step are approximations. The hardened variant defeats
+regexes, not a JS engine.
