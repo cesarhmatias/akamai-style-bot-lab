@@ -170,7 +170,7 @@ async def test_sensor_js_obfuscated_and_deterministic(http: httpx.AsyncClient) -
     assert obfuscate(SRC_PATH.read_text(), "other") != js
 
 
-def test_obfuscated_js_is_syntactically_valid() -> None:
+def test_obfuscated_js_is_syntactically_valid(tmp_path: Path) -> None:
     import shutil
     import subprocess
 
@@ -186,5 +186,7 @@ def test_obfuscated_js_is_syntactically_valid() -> None:
     if not node:
         pytest.skip("node not available")
     out = obfuscate(SRC_PATH.read_text(), SID)
-    res = subprocess.run([node, "--check", "/dev/stdin"], input=out, text=True, capture_output=True)
+    f = tmp_path / "s.js"
+    f.write_text(out)
+    res = subprocess.run([node, "--check", str(f)], text=True, capture_output=True)
     assert res.returncode == 0, res.stderr
