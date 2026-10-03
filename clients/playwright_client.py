@@ -11,6 +11,10 @@ overridden to Chrome/131 and ``navigator.webdriver`` is hidden with ``Object.def
 Both are common recipes and both are what the lab's version_consistency / header_order /
 js_integrity checks look for, so the matrix shows what they catch. RESULTS.md explains how a
 client would avoid each finding; none of that is applied here.
+
+The visitor itself (:func:`drive`) is shared with the Patchright client through
+:class:`BrowserFlavor`, which holds everything that differs between the two: the launch, the
+context settings, the library's timeout error and how ``page.evaluate`` reaches the page's world.
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ import contextlib
 import math
 import random
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from playwright.sync_api import Browser, BrowserContext, Page, Response, sync_playwright
@@ -96,7 +102,27 @@ def visit_landing(page: Page, rng: random.Random, *, first: bool = False) -> Non
         page.wait_for_function("window.__akStepupDone === true", timeout=3_000)
 
 
-def in_page_post(page: Page, path: str, body: dict[str, Any] | None) -> tuple[int, str | None]:
+@dataclass(frozen=True)
+class BrowserFlavor:
+    """What differs between the clients that speak the Playwright API.
+
+    ``launch`` takes the started library and returns a browser, ``new_context`` configures one
+    browser context (every fresh session gets its own), ``timeout_error`` is the library's
+    timeout exception and ``main_world`` holds the ``page.evaluate`` keyword arguments that run
+    a script in the page's own JavaScript world (Patchright evaluates in an isolated world by
+    default, where the page's ``fetch`` wrappers do not exist)."""
+
+    label: str
+    start: Callable[[], Any]
+    launch: Callable[[Any], Any]
+    new_context: Callable[[Any], Any]
+    timeout_error: type[Exception]
+    main_world: dict[str, Any] = field(default_factory=dict)
+
+
+def in_page_post(
+    page: Page, path: str, body: dict[str, Any] | None, main_world: dict[str, Any] | None = None
+) -> tuple[int, str | None]:
     """``fetch`` from the landing page, so the page's wrappers (inline telemetry) apply."""
     script = """async ([path, body]) => {
         const init = body === null ? {} : {method: 'POST', body: JSON.stringify(body),
@@ -105,7 +131,7 @@ def in_page_post(page: Page, path: str, body: dict[str, Any] | None) -> tuple[in
         await r.text();
         return [r.status, r.headers.get('x-lab-report-id')];
     }"""
-    status, report_id = page.evaluate(script, [path, body])
+    status, report_id = page.evaluate(script, [path, body], **(main_world or {}))
     return int(status), report_id
 
 
@@ -160,13 +186,15 @@ def new_context(browser: Browser) -> BrowserContext:
     return ctx
 
 
-def play_tile_game(browser: Browser, rng: random.Random) -> tuple[int, str | None]:
+def play_tile_game(
+    flavor: BrowserFlavor, browser: Browser, rng: random.Random
+) -> tuple[int, str | None]:
     """A visitor who arrives straight at the challenged URL in a fresh browser session.
 
     A fresh context matters: the engine downgrades ``challenge`` to monitor for a session that
     already holds a valid ``sec_cpt`` (the landing page's proactive solver earns one), so the
     tile game is only ever served to a session that has not solved another challenge."""
-    ctx = new_context(browser)
+    ctx = flavor.new_context(browser)
     try:
         page = ctx.new_page()
         resp = page.goto(f"{LAB_URL}/protected/interactive_challenge", wait_until="load")
@@ -178,11 +206,11 @@ def play_tile_game(browser: Browser, rng: random.Random) -> tuple[int, str | Non
         ctx.close()
 
 
-def play_interstitial(browser: Browser, case: str) -> CaseResult:
+def play_interstitial(flavor: BrowserFlavor, browser: Browser, case: str) -> CaseResult:
     """A fresh visitor (no cookies) is sent the cookieless interstitial by the gate; the page's
     own script solves it and reloads. The cell is the bm_verify_interstitial signal of the
     request the reload makes, i.e. after the interstitial attempt."""
-    ctx = new_context(browser)
+    ctx = flavor.new_context(browser)
     try:
         page = ctx.new_page()
         verifies: list[Response] = []
@@ -193,25 +221,36 @@ def play_interstitial(browser: Browser, case: str) -> CaseResult:
                 timeout=30_000,
             ) as info:
                 page.goto(LAB_URL + INTERSTITIAL_RETURN_TO, wait_until="load")
-        except PlaywrightTimeoutError:
-            return judge(LABEL, case, 0, None, "no scored request after the interstitial")
+        except flavor.timeout_error:
+            return judge(flavor.label, case, 0, None, "no scored request after the interstitial")
         resp = info.value
         accepted = [v.status == 200 for v in verifies]  # the lab answers 403 on a bad solve
         note = "script ran in the browser, verify " + (
             "accepted" if accepted and all(accepted) else "rejected or never sent"
         )
-        return judge(LABEL, case, resp.status, resp.headers.get(REPORT_ID_HEADER), note)
+        return judge(flavor.label, case, resp.status, resp.headers.get(REPORT_ID_HEADER), note)
     finally:
         ctx.close()
 
 
-def run(cases: list[str] | None = None) -> list[CaseResult]:
+PLAYWRIGHT = BrowserFlavor(
+    label=LABEL,
+    start=sync_playwright,
+    launch=lambda pw: pw.chromium.launch(headless=True),
+    new_context=new_context,
+    timeout_error=PlaywrightTimeoutError,
+)
+
+
+def drive(flavor: BrowserFlavor, cases: list[str] | None = None) -> list[CaseResult]:
+    """The visitor: landing page, then every case on its endpoint class."""
     rng = random.Random(SEED)
     wanted = cases or CASES
+    label = flavor.label
     out: dict[str, CaseResult] = {}
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        ctx = new_context(browser)
+    with flavor.start() as pw:
+        browser = flavor.launch(pw)
+        ctx = flavor.new_context(browser)
         page = ctx.new_page()
         visit_landing(page, rng, first=True)
         on_landing = True
@@ -219,19 +258,19 @@ def run(cases: list[str] | None = None) -> list[CaseResult]:
             kind = CASE_TABLE[case].endpoint
             with row_env(case):
                 if kind == "interstitial":
-                    out[case] = play_interstitial(browser, case)
+                    out[case] = play_interstitial(flavor, browser, case)
                     continue
                 if case == "interactive_challenge":
-                    status, rid = play_tile_game(browser, rng)
+                    status, rid = play_tile_game(flavor, browser, rng)
                     note = "tile game played with a curved pointer path, in a fresh session"
-                    out[case] = judge(LABEL, case, status, rid, note)
+                    out[case] = judge(label, case, status, rid, note)
                     continue
                 if kind == "protected" and case != "avf_stepup":
                     resp = page.goto(f"{LAB_URL}/protected/{case}", wait_until="load")
                     on_landing = False
                     status = resp.status if resp else 0
                     rid = resp.headers.get(REPORT_ID_HEADER) if resp else None
-                    out[case] = judge(LABEL, case, status, rid)
+                    out[case] = judge(label, case, status, rid)
                     continue
                 # cases that need the storefront page: step-up script, login/checkout, mobile
                 if not on_landing:
@@ -241,23 +280,30 @@ def run(cases: list[str] | None = None) -> list[CaseResult]:
                     resp = page.goto(f"{LAB_URL}/protected/{case}", wait_until="load")
                     on_landing = False
                     out[case] = judge(
-                        LABEL,
+                        label,
                         case,
                         resp.status if resp else 0,
                         resp.headers.get(REPORT_ID_HEADER) if resp else None,
                     )
                 elif kind == "login":
                     status, rid = in_page_post(
-                        page, "/api/login", {"username": USERNAME, "password": "hunter2-hunter2"}
+                        page,
+                        "/api/login",
+                        {"username": USERNAME, "password": "hunter2-hunter2"},
+                        flavor.main_world,
                     )
-                    out[case] = judge(LABEL, case, status, rid)
+                    out[case] = judge(label, case, status, rid)
                 elif kind == "checkout":
-                    status, rid = in_page_post(page, "/api/checkout", {"qty": 1})
-                    out[case] = judge(LABEL, case, status, rid)
+                    status, rid = in_page_post(page, "/api/checkout", {"qty": 1}, flavor.main_world)
+                    out[case] = judge(label, case, status, rid)
                 elif kind == "mobile":
-                    status, rid = in_page_post(page, MOBILE_PATH, None)
+                    status, rid = in_page_post(page, MOBILE_PATH, None, flavor.main_world)
                     out[case] = judge(
-                        LABEL, case, status, rid, "browser has no native SDK header to send"
+                        label, case, status, rid, "browser has no native SDK header to send"
                     )
         browser.close()
     return [out[c] for c in wanted]
+
+
+def run(cases: list[str] | None = None) -> list[CaseResult]:
+    return drive(PLAYWRIGHT, cases)
