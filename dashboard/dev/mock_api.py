@@ -1,9 +1,12 @@
-"""Stdlib mock of the lab API + static server: python dev/mock_api.py [port]"""
+"""Stdlib mock of the lab API + static server: python dev/mock_api.py [port]
+
+Only modules/requests/feed are mocked (/api/flags and /api/policy answer 404 on purpose to exercise the
+error states). For the full v2 surface run the real API and dev/proxy.py instead."""
 import json, os, random, threading, time, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODS = [dict(slug=s, title=s.replace("_", " ").title(), description=f"Mock description for {s}.", category=c, enabled=True)
+MODS = [dict(slug=s, title=s.replace("_", " ").title(), description=f"Mock description for {s}.", category=c, enabled=True, confidence=random.choice(["high", "medium", "low", "lab"]), applies_to=["page", "protected"], flags=[], challenge_providers=[])
         for s, c in [("tls_fingerprint", "passive"), ("h2_fingerprint", "passive"), ("header_order", "passive"), ("abck_cookie", "cookie"),
                      ("sensor_data", "js"), ("proof_of_work", "js"), ("behavioral", "behavioral"), ("ip_reputation", "network")]]
 REPORTS, SUBS = [], []
@@ -16,6 +19,8 @@ def fake():
         user_agent="Mozilla/5.0 Chrome/126" if lab != "naive" else "python-requests/2.32", score=sc, blocked=bad, client_label=lab,
         signals=[dict(module=m, verdict="fail" if bad else "pass", score=sc, reason="Mock: JA3 unknown to browser set" if bad else "Mock: matches Chrome", details={"ja3": "771,4865-4866"})],
         fingerprint=dict(ja3="771,4865-4866,0-23", ja3_hash="abc123", ja4="t13d1516h2_x_y", h2="1:65536;4:6291456;6:262144|15663105|0|m,a,s,p", header_order="Host,User-Agent,Accept"),
+        action="deny" if bad else "monitor", segment="aggressive" if bad else "cautious", endpoint_class="protected", telemetry_type="standard",
+        is_human=False, origin_headers={"Akamai-Bot": "Akamai-Unclassified Bot (lab-defined):deny:aggressive"} if bad else {},
         headers=[["host", "localhost"], ["user-agent", "x"], ["accept", "*/*"]], cookies={"bm_sz": "abc~1"})
 
 def emit():
