@@ -1,0 +1,48 @@
+[project]
+name = "akamai-style-bot-lab"
+version = "0.1.0"
+description = "Self-hosted playground that simulates Akamai-style bot-detection techniques."
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.8",
+  "redis>=5.0",
+  "sse-starlette>=2.1",
+]
+
+[project.optional-dependencies]
+clients = ["requests>=2.32", "curl_cffi>=0.7", "playwright>=1.47"]
+dev = [
+  "pytest>=8", "pytest-asyncio>=0.24", "pytest-cov>=5", "httpx>=0.27",
+  "ruff>=0.6", "mypy>=1.11", "types-requests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+disallow_untyped_defs = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+files = ["api/app", "clients"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["api/tests"]
+pythonpath = ["api"]
+
+[tool.coverage.run]
+source = ["api/app"]
+omit = ["api/app/main.py"]
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true

@@ -1,0 +1,53 @@
+# Akamai-style bot-detection lab. `docker compose up --build` and open http://localhost:3000
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  api:
+    build: ./api
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  edge:
+    build: ./edge
+    environment:
+      UPSTREAM: http://api:8000
+      LISTEN: ":8443"
+    ports:
+      - "8443:8443"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/edge", "-healthcheck"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+      edge:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
