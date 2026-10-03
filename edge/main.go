@@ -29,14 +29,22 @@ const (
 	hJA4       = "x-ja4"
 	hJA3Grease = "x-ja3-grease"
 	hTLSExts   = "x-tls-exts"
+	hTLSGroups = "x-tls-groups"
+	hTLSSigAlg = "x-tls-sigalgs"
+	hTLSALPN   = "x-tls-alpn"
+	hTLSALPS   = "x-tls-alps"
 	hH2        = "x-h2-fingerprint"
 	hH2Labeled = "x-h2-fingerprint-labeled"
+	hH2HdrPri  = "x-h2-headers-priority"
 	hOrder     = "x-header-order"
 	hProto     = "x-http-proto"
 	hClientIP  = "x-client-ip"
 )
 
-var injected = []string{hJA3, hJA3Hash, hJA4, hJA3Grease, hTLSExts, hH2, hH2Labeled, hOrder, hProto, hClientIP}
+var injected = []string{
+	hJA3, hJA3Hash, hJA4, hJA3Grease, hTLSExts, hTLSGroups, hTLSSigAlg, hTLSALPN, hTLSALPS,
+	hH2, hH2Labeled, hH2HdrPri, hOrder, hProto, hClientIP,
+}
 
 func getenv(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -201,9 +209,14 @@ func (e *edge) forward(w http.ResponseWriter, r *http.Request, info *connInfo, o
 	h.Set(hJA4, hl.JA4())
 	h.Set(hJA3Grease, map[bool]string{true: "1", false: "0"}[hl.HasGrease()])
 	h.Set(hTLSExts, hl.ExtsWire())
+	h.Set(hTLSGroups, hl.GroupsWire())
+	h.Set(hTLSSigAlg, hl.SigAlgsWire())
+	h.Set(hTLSALPN, hl.ALPNWire())
+	h.Set(hTLSALPS, hl.ALPSWire())
 	if info.h2 != nil {
 		h.Set(hH2, info.h2.Canonical())
 		h.Set(hH2Labeled, info.h2.Labeled())
+		h.Set(hH2HdrPri, info.h2.HeadersPriorityWire())
 	}
 	h.Set(hOrder, strings.Join(order, ","))
 	h.Set(hProto, info.proto)

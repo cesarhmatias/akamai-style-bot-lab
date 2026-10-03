@@ -228,6 +228,48 @@ func (h *Hello) ExtsWire() string {
 	})
 }
 
+// GroupsWire lists supported_groups in wire order, decimal, GREASE shown as "grease".
+// Era marker: 4588 (0x11EC, X25519MLKEM768) means Chrome 131+, 25497 (0x6399, Kyber) pre-131.
+func (h *Hello) GroupsWire() string {
+	return joinU16(h.Curves, ",", func(v uint16) string {
+		if isGrease(v) {
+			return "grease"
+		}
+		return dec(v)
+	})
+}
+
+// SigAlgsWire lists signature_algorithms as 4-digit hex in wire order (GREASE as "grease").
+// Era marker: ML-DSA schemes 0904,0905,0906 first in a Chrome-shaped hello (Chrome 150+).
+func (h *Hello) SigAlgsWire() string {
+	return joinU16(h.SigAlgs, ",", func(v uint16) string {
+		if isGrease(v) {
+			return "grease"
+		}
+		return hex4(v)
+	})
+}
+
+// ALPNWire lists the ALPN protocol names the client offered, in wire order.
+func (h *Hello) ALPNWire() string {
+	return strings.Join(h.ALPN, ",")
+}
+
+// ALPSWire reports the ALPS (application_settings) codepoint the client sent:
+// "17613" (current, Chrome 133+), "17513" (legacy, Chrome <= 132) or "none".
+func (h *Hello) ALPSWire() string {
+	res := "none"
+	for _, e := range h.Exts {
+		switch e {
+		case 17613:
+			return "17613"
+		case 17513:
+			res = "17513"
+		}
+	}
+	return res
+}
+
 func sha12(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])[:12]

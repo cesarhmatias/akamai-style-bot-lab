@@ -18,18 +18,23 @@ const h2Preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 // H2Print is the connection-level HTTP/2 fingerprint material.
 type H2Print struct {
 	Settings   [][2]uint32 // id,value in wire order
-	WindowInc  uint32      // first WINDOW_UPDATE on stream 0 (0 if none)
+	WindowInc  uint32      // first WINDOW_UPDATE on stream 0
+	HasWU      bool        // a connection-level WINDOW_UPDATE was seen
+	HdrPri     string      // priority of the first HEADERS frame "exclusive:dep:weight" ("" if no PRIORITY flag)
 	Priorities []string    // "stream:exclusive:dep:weight" per PRIORITY frame
 	Pseudo     []string    // pseudo-header letters m,a,s,p in wire order
 	Order      []string    // regular header names of the first HEADERS, wire order
 }
 
-// Canonical renders the Akamai text form: settings|window_update|priority|pseudo.
+// Canonical renders the string format of Akamai's 2017 HTTP/2 fingerprinting paper:
+// settings|window_update|priority|pseudo. An absent WINDOW_UPDATE is "00" (paper, §1.2
+// of the audit report); an absent PRIORITY set is "0".
 func (p *H2Print) Canonical() string {
 	return p.format(false)
 }
 
-// Labeled renders S[...]|WU[...]|P[...]|PS[...].
+// Labeled renders S[...]|WU[...]|P[...]|PS[...]. This is the paper's NOTATION, kept
+// here only as a lab convenience for humans; it is NOT Akamai's literal format.
 func (p *H2Print) Labeled() string {
 	return p.format(true)
 }
@@ -43,11 +48,25 @@ func (p *H2Print) format(labeled bool) string {
 	if len(p.Priorities) > 0 {
 		pr = strings.Join(p.Priorities, ",")
 	}
-	parts := []string{strings.Join(s, ";"), strconv.FormatUint(uint64(p.WindowInc), 10), pr, strings.Join(p.Pseudo, ",")}
+	wu := "00"
+	if p.HasWU {
+		wu = strconv.FormatUint(uint64(p.WindowInc), 10)
+	}
+	parts := []string{strings.Join(s, ";"), wu, pr, strings.Join(p.Pseudo, ",")}
 	if !labeled {
 		return strings.Join(parts, "|")
 	}
 	return fmt.Sprintf("S[%s]|WU[%s]|P[%s]|PS[%s]", parts[0], parts[1], parts[2], parts[3])
+}
+
+// HeadersPriorityWire renders the priority carried in the first HEADERS frame as
+// "exclusive:dep:weight" (weight = wire byte + 1, like the P component), or "none".
+// This is an extra signal outside the Akamai string (audit report §1.2 case 2).
+func (p *H2Print) HeadersPriorityWire() string {
+	if p.HdrPri == "" {
+		return "none"
+	}
+	return p.HdrPri
 }
 
 // pseudoLetter maps a pseudo-header name to its Akamai letter.
@@ -105,7 +124,8 @@ func sniffH2(c io.Reader) (*H2Print, []byte, error) {
 					uint32(binary.BigEndian.Uint16(pl[i:])), binary.BigEndian.Uint32(pl[i+2:])})
 			}
 		case typ == 8 && stream == 0 && len(pl) == 4: // WINDOW_UPDATE
-			if fp.WindowInc == 0 {
+			if !fp.HasWU {
+				fp.HasWU = true
 				fp.WindowInc = binary.BigEndian.Uint32(pl) & 0x7fffffff
 			}
 		case typ == 2 && len(pl) == 5: // PRIORITY
@@ -124,6 +144,10 @@ func sniffH2(c io.Reader) (*H2Print, []byte, error) {
 			if flags&0x20 != 0 { // PRIORITY
 				if len(frag) < 5 {
 					return nil, raw.Bytes(), errors.New("h2: short HEADERS")
+				}
+				if fp.HdrPri == "" {
+					dep := binary.BigEndian.Uint32(frag)
+					fp.HdrPri = fmt.Sprintf("%d:%d:%d", dep>>31, dep&0x7fffffff, int(frag[4])+1)
 				}
 				frag = frag[5:]
 			}
