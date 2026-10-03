@@ -83,16 +83,22 @@ async def test_control_plane() -> None:
         assert await store.get("toggle:fixed") == "0"
 
 
-async def test_abck_reflects_validated_state() -> None:
-    from app.session import mark_abck_validated
+async def test_abck_stays_put_by_default_and_flips_in_tilde0_mode() -> None:
+    from app.modules.abck_cookie import AbckCookieModule
+    from app.session import mark_abck_validated, parse_abck
 
-    c, store = mk()
-    async with c:
-        await c.get("/protected/fixed")
-        sid = c.cookies["bm_sz"]
+    store = MemoryStore()
+    app = create_app(store=store, modules=[Fixed(), AbckCookieModule()])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/protected/fixed")
+        sid, first = c.cookies["bm_sz"], r.cookies["_abck"]
+        assert parse_abck(first) is not None and parse_abck(first)[1] == -1
         await mark_abck_validated(store, sid)
         r = await c.get("/protected/fixed")
-        assert "~0~" in r.cookies["_abck"]
+        assert "_abck" not in r.cookies  # default mode: the sensor POST refreshes it, no churn
+        await c.put("/api/flags/abck_tilde0_mode", json={"value": True})
+        r = await c.get("/protected/fixed")
+        assert "~0~" in r.cookies["_abck"]  # LOW flag: the cookie carries ~0~ once validated
 
 
 async def test_cors() -> None:

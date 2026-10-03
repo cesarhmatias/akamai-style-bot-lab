@@ -52,6 +52,10 @@ from .session import (
     COOKIE_AK_BMSC,
     COOKIE_BM_SZ,
     abck_cookie_value,
+    abck_ident,
+    abck_needs_refresh,
+    cookie_attrs,
+    extra_cookies,
     is_abck_validated,
     new_ak_bmsc,
     new_bm_sz,
@@ -120,19 +124,34 @@ def session_id_for(request: Request) -> str:
     return sid
 
 
-async def finalize_cookies(request: Request, response: Response, store: SessionStore) -> None:
-    """Issue bm_sz/ak_bmsc/_abck when missing; keep _abck in sync with the store."""
+async def finalize_cookies(
+    request: Request,
+    response: Response,
+    store: SessionStore,
+    flags: dict[str, bool] | None = None,
+) -> None:
+    """Issue bm_sz/ak_bmsc/_abck when missing and keep _abck in sync with the store.
+
+    Cookie shapes, attributes and the flag-gated extras (bm_sv, bm_mi, ``~0~`` mode) come from
+    ``session.py``; the cookies queued by ``pre_request`` gates are added here too."""
+    if flags is None:
+        flags = await request.app.state.registry.resolved_flags()
     cookies = request.cookies
     sid = session_id_for(request)
-    opts: dict[str, Any] = {"path": "/", "samesite": "lax", "httponly": False}
     if COOKIE_BM_SZ not in cookies:
-        response.set_cookie(COOKIE_BM_SZ, sid, **opts)
+        response.set_cookie(COOKIE_BM_SZ, sid, **cookie_attrs(COOKIE_BM_SZ, flags))
     if COOKIE_AK_BMSC not in cookies:
-        response.set_cookie(COOKIE_AK_BMSC, new_ak_bmsc(), **opts)
+        response.set_cookie(COOKIE_AK_BMSC, new_ak_bmsc(), **cookie_attrs(COOKIE_AK_BMSC, flags))
     validated = await is_abck_validated(store, sid)
-    current = cookies.get(COOKIE_ABCK)
-    if current is None or (validated and "~0~" not in current):
-        response.set_cookie(COOKIE_ABCK, abck_cookie_value(validated), **opts)
+    tilde0 = bool(flags.get("abck_tilde0_mode"))
+    if abck_needs_refresh(cookies.get(COOKIE_ABCK), validated, tilde0):
+        value = abck_cookie_value(validated, tilde0=tilde0, ident=abck_ident(sid))
+        response.set_cookie(COOKIE_ABCK, value, **cookie_attrs(COOKIE_ABCK, flags))
+    for name, value, attrs in extra_cookies(sid, flags):
+        if name not in cookies:
+            response.set_cookie(name, value, **attrs)
+    for name, value, attrs in getattr(request.state, "extra_cookies", []):
+        response.set_cookie(name, value, **attrs)  # cookies queued by pre_request gates
 
 
 def _json_body(ctx: RequestContext) -> dict[str, Any]:
@@ -547,6 +566,12 @@ def create_app(
             if resp is not None:
                 await finalize_cookies(request, resp, store)
                 return resp
+        try:  # feed the SCANTL reputation category (path scanners hit many 404s)
+            from .modules.ip_reputation import record_scan_probe
+
+            await record_scan_probe(store, ctx.client_ip)
+        except ImportError:  # pragma: no cover - module removed
+            pass
         raise HTTPException(404, "not found")
 
     return app
