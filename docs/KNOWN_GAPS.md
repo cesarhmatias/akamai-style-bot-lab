@@ -19,13 +19,14 @@ off) or labels the behaviour as an approximation, and the case doc says which.
    `akamai-bm-telemetry` on XHR).
 4. **SBSD:** the script URL, the body shape, the cookies, and passive versus blocking behaviour.
 5. **sec-cpt:** 428 versus 200, the provider, `chlg_duration` values, and the verify path. For the `bm-verify` interstitial,
-   whether the verify response ever carries a JSON `location` (see section 4).
+   whether the verify response ever carries a JSON `location`, and whether the 5-second meta-refresh wait is enforced by
+   the server (see section 4).
 6. **The behavioral challenge's DOM** and the events it records.
 7. **The pixel POST body**, and which cookie changes afterwards.
 8. **Deny responses:** the `Server` header, `Mime-Version`, and the reference format. Tarpit and serve-alternate are hard to
    observe by design.
-9. **Whether a non-permuted extension order, a stale Chrome version or missing ML-DSA signature schemes get flagged in
-   practice.**
+9. **Whether a non-permuted extension order, a stale Chrome version, missing ML-DSA signature schemes or a missing Chrome
+   152 GREASE signature algorithm get flagged in practice.**
 10. **Safari 26's current TLS and HTTP/2 values.** The lab's Safari profiles come from Safari 18 captures.
 
 ## 2. Implemented on weak sources: flag-gated or labelled
@@ -51,7 +52,7 @@ Akamai analogue.
 | HTTP/3 fingerprinting by Akamai | **nothing** (see deferred features) | none |
 | Detection names "Cookie Integrity Failed", "Session Validation", "Browser Validation" | not used as names; `session_validation` is a lab approximation | none |
 | SBSD is part of Content Protector | speculation; not modelled | none |
-| JSON `location` in the interstitial verify response (audit §3.1, Low) | optional, same-origin only, and clients must not depend on it (see section 4) | none |
+| JSON `location` in the interstitial verify response (audit §3.1, Low) | the verify reply carries the challenged path, same-origin only; clients must not depend on it (see section 4) | `pow_interstitial_location` (off) |
 
 ## 3. Deferred features (deliberately not built)
 
@@ -75,8 +76,18 @@ Akamai analogue.
 
 - **`location` in the verify response is unconfirmed.** Published sources show the interstitial clearing the session by
   reloading the page, or by a `<meta http-equiv="refresh">` that carries a single-use `bm-verify` token. None shows a JSON
-  `location` field in the `/_sec/verify?provider=interstitial` response. The lab may return one as an optional convenience;
-  clients should not depend on it, and any client that follows it must reject cross-origin targets.
+  `location` field in the `/_sec/verify?provider=interstitial` response. The lab returns one only with the Low flag
+  `pow_interstitial_location` (off); clients should not depend on it, and any client that follows it must reject
+  cross-origin targets.
+- **Cookie timing is approximated.** In the bershka capture the interstitial page sets only the site's own session cookies
+  and the verify response sets `_abck`, `bm_sz` and `ak_bmsc`. The lab issues all three with the page, because it binds the
+  token to `bm_sz`. Cookie presence therefore proves nothing in the lab: the gate clears only on server-side state (a solved
+  interstitial, a valid `sec_cpt` or a validated `_abck`).
+- **The meta-refresh wait is enforced by the lab.** The page refreshes after 5 seconds with the token, and the lab admits
+  that one navigation only after the 5 seconds have passed. The brief says Bot Manager "enforces a time penalty" on clients
+  that do not run JavaScript; that the server checks this particular wait is an inference.
+- **`i` is read as the issue time.** The observed `var i = 1789910678` is 2026-09-20 13:24 UTC, inside the capture window, so
+  the lab uses the issuing Unix time. One sample cannot prove it.
 
 ## How to close a gap without leaving the project's boundaries
 

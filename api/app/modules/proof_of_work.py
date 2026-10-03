@@ -21,13 +21,16 @@ How real Akamai uses it (report §2.4 and §1.2 case 6)
       wait), ``behavioral`` (sensor data) and ``adaptive`` (both, ``count`` solutions).
     * Tier MEDIUM (Bot Manager brief + community/HAR observations): the cookieless
       INTERSTITIAL. The brief describes an interstitial challenge that "requires clients to
-      prove they support storing cookies and executing JavaScript". Observed pages carry a
-      ``bm-verify`` token and an embedded script of the form
-      ``var i = 1234; var j = i + Number("56" + "78");`` and POST JSON
-      ``{"bm-verify": <token>, "pow": <i + int(a+b)>}`` to ``/_sec/verify?provider=interstitial``;
-      cookies are then issued and the page reloads. The cookie-issuing step and the page's
-      exact wording are approximations. A JSON ``location`` in the reply is UNCONFIRMED (the
-      sources show reload / meta-refresh, not a JSON location).
+      prove they support storing cookies and executing JavaScript. If not, Bot Manager
+      enforces a time penalty". Observed pages (bershka-scraper, 2026-09-19..22; sugarplum
+      #172/#177, 2026-09-27) carry a ``bm-verify`` token (``AAQ...``), a script of the form
+      ``var i = 1789910678; var j = i + Number("3886" + "11036");`` that POSTs JSON
+      ``{"bm-verify": <token>, "pow": <i + int(a+b)>}`` to ``/_sec/verify?provider=interstitial``
+      and reloads, and a ``<meta http-equiv="refresh" content="5; URL='<url>&bm-verify=...'">``.
+      The page itself sets no Akamai cookie; the verify response sets ``_abck``, ``bm_sz`` and
+      ``ak_bmsc``, and the cleared session kept getting the real page. Refetching the URL with
+      the single-use token (no JavaScript) returned the real page once. A JSON ``location`` in
+      the reply is UNCONFIRMED (LOW: the sources show a reload or the meta refresh).
     The puzzle algorithm, challenge field values and cookie value are LAB-DEFINED; none of
     this is Akamai's encoding.
 
@@ -53,26 +56,42 @@ How the lab simulates it
       for the harness and is NOT the interstitial. Solving it alone only WARNs.
 
 The interstitial (cookieless gate)
-    * Page: HTTP 200 HTML with a per-issuance ``bm-verify`` token bound to ``bm_sz`` (single
-      use, expires after ``challenge_timeout``; same failure reasons as the other variants:
-      ``unknown_or_replayed``, ``wrong_session``, ``expired``). The arithmetic is DATA in an
-      inline script; the server computes the expected ``pow`` from its stored spec
-      (``i`` and the digit parts), never from the page text and never with ``eval``.
+    * Page: HTTP 200 HTML with a per-issuance ``bm-verify`` token (``AAQ`` + random lab data)
+      bound to ``bm_sz`` (single use, expires after ``challenge_timeout``; same failure reasons
+      as the other variants: ``unknown_or_replayed``, ``wrong_session``, ``expired``). The
+      arithmetic is DATA in an inline script; the server computes the expected ``pow`` from its
+      stored spec, never from the page text and never with ``eval``. Basic shape as observed:
+      ``i`` is the issuing Unix time (the observed 1789910678 is 2026-09-20 UTC, inside the
+      capture window: an inference) and the parts have 4 and 5 digits, so ``pow`` often
+      exceeds 2**31 - 1, as the observed one does (a 32-bit signed solver overflows).
     * Verify: ``POST /_sec/verify?provider=interstitial`` (vendor-style absolute path, via
       ``root_router``) and ``POST /akam/proof_of_work/interstitial/verify`` (lab alias), body
-      ``{"bm-verify": token, "pow": int}``. On success the lab issues/refreshes ``bm_sz``,
-      ``ak_bmsc`` and ``_abck`` exactly as its own cookie issuance does (``main.finalize_cookies``),
-      stores ``pow:interstitial:{sid}`` and answers ``{"ok": true, ...}``; the page then reloads.
-      ``location`` is only returned when the issuing request path is a same-origin path
-      (``safe_location`` rejects anything with a scheme, netloc, ``//`` or backslash).
+      ``{"bm-verify": token, "pow": int}``. On success the lab stores
+      ``pow:interstitial:{sid}``, issues/refreshes ``bm_sz``, ``ak_bmsc`` and ``_abck`` through
+      ``main.finalize_cookies`` and answers ``{"ok": true, ...}``; the page then reloads.
+      APPROXIMATION: the lab already hands those cookies out with the page, because it binds
+      the token to ``bm_sz``; in the capture they arrive only with the verify response. Cookie
+      presence therefore proves nothing here, and the gate checks server-side state.
+    * ``location`` (flag ``pow_interstitial_location``, LOW, default off): the reply carries
+      the challenged request's path, only when ``safe_location`` accepts it (no scheme,
+      netloc, ``//``, backslash or control characters). Off by default: no published source
+      shows one, so the default flow is the observed reload.
     * Gate: with the flag ``pow_cookieless_gate`` (MEDIUM, default OFF because it changes the
-      first-visit behaviour of every client) a navigation that arrives without ``bm_sz`` and
-      ``_abck`` is served this page instead of the resource; solving it clears the session.
-      The ``interstitial`` challenge provider serves the same page (HTML) or a 428 JSON with
-      the same token and expression fields (XHR).
+      first-visit behaviour of every client) an HTML navigation is served this page instead of
+      the resource until the session has server-side proof: a solved interstitial, a valid
+      ``sec_cpt`` or an ``_abck`` the sensor flow validated. Reloading with the cookies the page
+      handed out is not enough. The ``interstitial`` challenge provider serves the same page
+      (HTML) or a 428 JSON with the same token and expression fields (XHR).
+    * No-JavaScript path: the page's meta refresh re-requests the URL with
+      ``bm-verify=<token>`` after ``REFRESH_SECONDS`` (5, as observed). A gated navigation that
+      carries an unused interstitial token at least that long after issue passes once (the
+      brief's time penalty; that Akamai enforces the wait server-side is an inference). The
+      token is consumed and nothing is cleared, so the next navigation gets a new interstitial.
     * Scoring: a fixed regex solves the basic page without running any JavaScript, so a solved
-      interstitial only WARNs (30) like ``simple``. Only the hard sha256 proof of work PASSes.
-      Precedence: hard > interstitial/simple > none.
+      interstitial only WARNs, like ``simple``. The score is 20, the top of the cautious band
+      of every telemetry type: the default policy monitors (serves) the session, as the
+      bershka capture shows for a cleared session, but it never PASSes. Only the hard sha256
+      proof of work PASSes. Precedence: hard > interstitial/simple > none.
     * Hardening (flag ``pow_interstitial_hardened``, confidence LAB, default OFF): the page's
       arithmetic shape is randomized per issuance (identifier names, number of concatenated
       string parts, operand order, whitespace, quote style, ``Number`` / ``parseInt(..,10)`` /
@@ -87,6 +106,10 @@ How a client passes it
     ``sec_cpt`` cookie. A pure-HTTP client can do all of this after sleeping, which is the
     intended lesson: the wait costs time, not identity.
 
+    The cookieless interstitial: parse the token and the arithmetic, POST ``{"bm-verify",
+    "pow"}``, reload; or, without JavaScript, follow the meta refresh after 5 seconds (one
+    page, nothing cleared).
+
 Limits: difficulty and wait are lab constants, and the legacy routes under
 ``/akam/proof_of_work/`` exist only for the harness clients (same enforcement).
 """
@@ -97,12 +120,14 @@ import base64
 import hashlib
 import json
 import random
+import string
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from html import escape as html_escape
 from typing import Any, ClassVar
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -116,14 +141,20 @@ from app.contract import (
     Verdict,
 )
 from app.policy import PolicyStore, clear_challenge_failures
+from app.session import is_abck_validated
 
 DEFAULT_DIFFICULTY = 4
 SCRIPT_NAME = "sec-cpt-1.0.js"
 SCRIPT_URL = f"/_sec/cp_challenge/{SCRIPT_NAME}"
 PROVIDERS = ("crypto", "behavioral", "adaptive")
 INTERSTITIAL = "interstitial"
-INTERSTITIAL_PAGE_PATH = "/akam/proof_of_work/interstitial"  # on-demand route (router mount)
-INTERSTITIAL_SCORE = 30  # a regex can solve the basic page: WARN, never PASS
+# A regex can solve the basic page: WARN, never PASS. 20 is the top of the cautious band for
+# every telemetry type (policy.DEFAULT_BANDS), so the default policy monitors the session and
+# serves the page, as the bershka capture shows for a cleared session.
+INTERSTITIAL_SCORE = 20
+REFRESH_SECONDS = 5  # the observed meta refresh delay (sugarplum #172)
+TOKEN_PREFIX = "AAQ"  # observed bm-verify tokens start with AAQ; the rest is random lab data
+TOKEN_ALPHABET = string.ascii_letters + string.digits
 COOKIE = "sec_cpt"
 STATE_TTL = 3600
 # An unsolved challenge is a gray signal, not proof of automation: 45 lands in the "strict"
@@ -250,10 +281,37 @@ def safe_location(target: str | None) -> str | None:
     return None if parts.scheme or parts.netloc else target
 
 
-def new_interstitial_spec(rng: random.Random, hardened: bool) -> dict[str, Any]:
-    """The arithmetic as DATA: ``pow = i + int("".join(parts))``."""
+def request_target(path: str, query: str) -> str:
+    """Path and query of a challenged request, minus any stale ``bm-verify`` parameter."""
+    kept = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True) if k != "bm-verify"]
+    return path + (f"?{urlencode(kept)}" if kept else "")
+
+
+def with_token(target: str, token: str) -> str:
+    """``target`` (a same-origin path) with ``bm-verify=<token>`` appended, percent-encoded so it
+    can sit inside the meta refresh attribute."""
+    parts = urlsplit(target)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "bm-verify"]
+    query.append(("bm-verify", token))
+    return urlunsplit(("", "", quote(parts.path or "/", safe="/%"), urlencode(query), ""))
+
+
+def js_string(value: str) -> str:
+    """A JavaScript string literal that is also safe inside an inline ``<script>``."""
+    return (
+        json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    )
+
+
+def new_interstitial_spec(rng: random.Random, hardened: bool, now: float) -> dict[str, Any]:
+    """The arithmetic as DATA: ``pow = i + int("".join(parts))``.
+
+    Basic shape as observed: ``i`` is the issuing Unix time and the parts have 4 and 5 digits."""
     if not hardened:
-        return {"i": rng.randint(1000, 9999), "parts": [str(rng.randint(10, 99)) for _ in range(2)]}
+        return {
+            "i": int(now),
+            "parts": [str(rng.randint(1000, 9999)), str(rng.randint(10000, 99999))],
+        }
     digits = str(rng.randint(1, 9)) + "".join(
         str(rng.randint(0, 9)) for _ in range(rng.randint(3, 7))
     )
@@ -304,10 +362,20 @@ def render_arithmetic(rng: random.Random, spec: dict[str, Any], hardened: bool) 
     return (";" + ws()).join(stmts) + ";", vj
 
 
-def render_interstitial(token: str, arithmetic: str, result: str) -> str:
-    """The cookieless interstitial page (HTTP 200). Lab-written markup, not Akamai's."""
+def render_interstitial(
+    token: str, arithmetic: str, result: str, *, refresh_url: str, after: str | None = None
+) -> str:
+    """The cookieless interstitial page (HTTP 200). Lab-written markup, not Akamai's.
+
+    ``refresh_url`` is the no-JavaScript path: a meta refresh carrying the single-use token, as
+    observed. After a successful verify the script follows a same-origin ``location`` when the
+    reply has one (LOW flag), else goes to ``after`` (only the on-demand lab route sets it:
+    reloading that route would just issue a fresh interstitial), else reloads, as observed."""
+    then = f"location.replace({js_string(after)})" if after else "location.reload()"
     return (
         '<!doctype html><html><head><meta charset="utf-8">'
+        f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}; '
+        f"URL='{html_escape(refresh_url)}'\">"
         "<title>Checking your browser</title></head>"
         '<body style="font-family:system-ui,sans-serif;text-align:center;margin-top:3rem">'
         "<p>Checking your browser&hellip;</p><script>(function(){"
@@ -316,12 +384,10 @@ def render_interstitial(token: str, arithmetic: str, result: str) -> str:
         'headers:{"Content-Type":"application/json"},'
         f'body:JSON.stringify({{"bm-verify":"{token}","pow":{result}}})}})'
         ".then(function(r){return r.json()}).then(function(d){if(!d||!d.ok){return}"
-        # Follow only a same-origin path (mirrors safe_location). Reloading the on-demand
-        # interstitial route would just issue a fresh interstitial, so leave it for "/".
+        # Follow only a same-origin path (mirrors safe_location).
         'var l=d.location;if(typeof l==="string"&&/^\\/(?![\\/\\\\])[^\\x00-\\x1f\\\\]*$/.test(l))'
         "{location.replace(l)}"
-        f'else if(location.pathname==="{INTERSTITIAL_PAGE_PATH}"){{location.replace("/")}}'
-        "else{location.reload()}})"
+        f"else{{{then}}}}})"
         ".catch(function(){});})();</script></body></html>"
     )
 
@@ -356,6 +422,15 @@ class ProofOfWork(DetectionModule):
             confidence=Confidence.MEDIUM,
             default=False,
             source="audit §1.2 case 6; Bot Manager brief",
+        ),
+        FlagSpec(
+            name="pow_interstitial_location",
+            description="Add a same-origin JSON location to the interstitial's verify reply. "
+            "Unverified: published sources show the page reloading (or a meta refresh), "
+            "never a location field.",
+            confidence=Confidence.LOW,
+            default=False,
+            source="audit §1.2 case 6, §3.1 (JSON location: one unpublished client)",
         ),
         FlagSpec(
             name="pow_interstitial_hardened",
@@ -476,7 +551,10 @@ class ProofOfWork(DetectionModule):
     ) -> dict[str, Any]:
         """Create and persist a challenge; return the public payload (token = challenge_id)."""
         cfg = await self.settings(store)
-        token = uuid.UUID(int=self.rng.getrandbits(128), version=4).hex
+        if variant == INTERSTITIAL:  # observed bm-verify tokens start with AAQ
+            token = TOKEN_PREFIX + "".join(self.rng.choice(TOKEN_ALPHABET) for _ in range(61))
+        else:
+            token = uuid.UUID(int=self.rng.getrandbits(128), version=4).hex
         now = self.clock()
         public: dict[str, Any] = {
             "provider": provider,
@@ -509,7 +587,7 @@ class ProofOfWork(DetectionModule):
             )
             record["answer"] = eval_expression(expr)
         elif variant == INTERSTITIAL:
-            spec = new_interstitial_spec(self.rng, hardened)
+            spec = new_interstitial_spec(self.rng, hardened, now)
             arithmetic, result = render_arithmetic(self.rng, spec, hardened)
             public.update(
                 {
@@ -582,7 +660,9 @@ class ProofOfWork(DetectionModule):
             return False, "no_sensor", rec
         return True, "ok", rec
 
-    async def accept(self, store: Any, sid: str, rec: dict[str, Any]) -> Response:
+    async def accept(
+        self, store: Any, sid: str, rec: dict[str, Any], *, with_location: bool = False
+    ) -> Response:
         """Record a solved challenge and build the success response (with ``sec_cpt``)."""
         resp = JSONResponse({"ok": True, "variant": rec["variant"], "provider": rec["provider"]})
         if rec["variant"] == "simple":
@@ -592,9 +672,10 @@ class ProofOfWork(DetectionModule):
             await store.set(
                 f"pow:{INTERSTITIAL}:{sid}", json.dumps({"solved_at": self.clock()}), ttl=STATE_TTL
             )
-            # UNCONFIRMED: sources show a page reload / meta-refresh, not a JSON location.
-            # Only a same-origin path (taken from the request that was challenged) is returned.
-            if rec.get("return_to"):
+            # LOW (flag pow_interstitial_location): sources show a page reload or a meta
+            # refresh, never a JSON location. Only a same-origin path (taken from the request
+            # that was challenged) is returned.
+            if with_location and rec.get("return_to"):
                 resp = JSONResponse({**json.loads(bytes(resp.body)), "location": rec["return_to"]})
             return resp
         now = self.clock()
@@ -640,7 +721,7 @@ class ProofOfWork(DetectionModule):
         self, request: Request, ctx: RequestContext, *, html: bool
     ) -> Response:
         """HTML page (200) or, for XHR, a 428 JSON carrying the same token and expression."""
-        return_to = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        return_to = request_target(request.url.path, request.url.query)
         public = await self.make_challenge(
             ctx.store,
             ctx.session_id,
@@ -654,17 +735,57 @@ class ProofOfWork(DetectionModule):
             for k in ("challenge_id", "variant", "expires_in", "result_var"):
                 public.pop(k, None)
             return JSONResponse(public, status_code=428, headers=headers)
-        page = render_interstitial(public["token"], public["expression"], public["result_var"])
+        page = render_interstitial(
+            public["token"],
+            public["expression"],
+            public["result_var"],
+            refresh_url=with_token(return_to, public["token"]),
+        )
         return HTMLResponse(page, headers=headers)
 
+    async def gate_cleared(self, ctx: RequestContext) -> bool:
+        """Server-side proof only. The lab hands ``bm_sz``/``ak_bmsc``/``_abck`` out with the
+        interstitial page itself (the token is bound to ``bm_sz``), so a cookie jar alone proves
+        nothing: a solved interstitial, a valid ``sec_cpt`` or a validated ``_abck`` clears it."""
+        sid = ctx.session_id
+        if not sid or ctx.cookies.get("bm_sz") != sid:
+            return False
+        if await self.challenge_satisfied(ctx, INTERSTITIAL):
+            return True
+        return await is_abck_validated(ctx.store, sid)
+
+    async def redeem_refresh(self, store: Any, token: str, sid: str) -> bool:
+        """The meta-refresh path for clients without JavaScript.
+
+        A navigation carrying an unused interstitial token passes the gate once, provided it
+        arrives at least ``REFRESH_SECONDS`` after the page was issued (the time penalty). The
+        token is then consumed; a request that comes too early keeps it. A request that sends a
+        ``bm_sz`` must send the one the token was issued for; one without cookies is accepted
+        (the observed refetch needs neither cookies nor JavaScript)."""
+        key = f"pow:ch:{token}"
+        raw = await store.get(key)
+        if raw is None:
+            return False
+        rec = json.loads(raw)
+        if rec.get("variant") != INTERSTITIAL or (sid and rec["sid"] != sid):
+            return False
+        elapsed = self.clock() - rec["issued_at"]
+        if elapsed < REFRESH_SECONDS:
+            return False
+        await store.delete(key)  # single use
+        return bool(elapsed <= rec["timeout"])
+
     async def pre_request(self, request: Request, ctx: RequestContext) -> Response | None:
-        """Cookieless gate (flag ``pow_cookieless_gate``, default off): a navigation that
-        arrives without ``bm_sz`` and ``_abck`` gets the interstitial instead of the page."""
+        """Cookieless gate (flag ``pow_cookieless_gate``, default off): an HTML navigation from a
+        session without server-side proof gets the interstitial instead of the page, unless it
+        carries a redeemable ``bm-verify`` token from the page's meta refresh."""
         if not ctx.flag("pow_cookieless_gate") or request.method != "GET":
             return None
-        accept = request.headers.get("accept", "")
-        if "text/html" not in accept or ("bm_sz" in ctx.cookies and "_abck" in ctx.cookies):
+        if "text/html" not in request.headers.get("accept", "") or await self.gate_cleared(ctx):
             return None
+        token = request.query_params.get("bm-verify", "")
+        if token and await self.redeem_refresh(ctx.store, token, request.cookies.get("bm_sz", "")):
+            return None  # one navigation passes; nothing is cleared
         return await self.interstitial_response(request, ctx, html=True)
 
     # -- routes --------------------------------------------------------------------------
@@ -684,12 +805,15 @@ class ProofOfWork(DetectionModule):
         if not ok:
             extra = {"retry_after": round(rec["retry_after"], 2)} if "retry_after" in rec else {}
             return JSONResponse({"ok": False, "error": reason, **extra}, status_code=403)
-        resp = await self.accept(store, sid, rec)
+        flags = await request.app.state.registry.resolved_flags()
+        resp = await self.accept(
+            store, sid, rec, with_location=bool(flags.get("pow_interstitial_location"))
+        )
         if rec["variant"] == INTERSTITIAL:
             # issue/refresh bm_sz, ak_bmsc and _abck the way the lab models cookie issuance
             from app.main import finalize_cookies  # late import: main discovers this module
 
-            await finalize_cookies(request, resp, store)
+            await finalize_cookies(request, resp, store, flags)
         return resp
 
     def root_router(self) -> APIRouter:
@@ -745,13 +869,17 @@ class ProofOfWork(DetectionModule):
 
         @r.get("/interstitial")
         async def interstitial_page(request: Request, return_to: str = "") -> Response:
-            """The interstitial page on demand; ``return_to`` is kept only if same-origin."""
+            """The interstitial page on demand; ``return_to`` is kept only if same-origin.
+
+            After a successful verify the page goes to ``return_to`` (default ``/``), because
+            reloading this route would only issue a fresh interstitial."""
             sid = request.cookies.get("bm_sz", "")
             if not sid:
                 return JSONResponse({"error": "no_session"}, status_code=400)
             hardened = (await request.app.state.registry.resolved_flags()).get(
                 "pow_interstitial_hardened", False
             )
+            after = safe_location(return_to) or "/"
             public = await self.make_challenge(
                 request.app.state.store,
                 sid,
@@ -760,7 +888,13 @@ class ProofOfWork(DetectionModule):
                 hardened=hardened,
                 return_to=return_to,
             )
-            page = render_interstitial(public["token"], public["expression"], public["result_var"])
+            page = render_interstitial(
+                public["token"],
+                public["expression"],
+                public["result_var"],
+                refresh_url=with_token(after, public["token"]),
+                after=after,
+            )
             return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 
         @r.post("/interstitial/verify")

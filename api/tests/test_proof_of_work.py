@@ -15,7 +15,14 @@ import pytest
 import pytest_asyncio
 from app.contract import RequestContext, Verdict
 from app.main import create_app
-from app.modules.proof_of_work import ProofOfWork, eval_expression, sub_nonce
+from app.modules.proof_of_work import (
+    INTERSTITIAL_SCORE,
+    REFRESH_SECONDS,
+    ProofOfWork,
+    eval_expression,
+    sub_nonce,
+)
+from app.session import mark_abck_validated
 from app.store import MemoryStore
 from test_actions import Scored
 
@@ -332,6 +339,7 @@ async def test_default_duration_comes_from_policy_not_constructor() -> None:
 
 BASIC_RE = re.compile(r'var\s+j\s*=\s*i\s*\+\s*Number\("(\d+)"\s*\+\s*"(\d+)"\)')
 USER_RE = BASIC_RE  # the pattern the user quoted
+HTML = {"accept": "text/html"}
 
 
 def script_of(page: str) -> str:
@@ -382,16 +390,21 @@ async def test_interstitial_page_shape_and_correct_answer(
 ) -> None:
     page = await get_interstitial(http)
     assert "var i = " in page and BASIC_RE.search(page)
-    assert "/_sec/verify?provider=interstitial" in page and "location.reload()" in page
+    assert "/_sec/verify?provider=interstitial" in page
+    assert 'location.replace("/")' in page  # the on-demand route never reloads itself
+    tok = token_of(page)
+    assert tok.startswith("AAQ")  # the observed token prefix
+    assert f"content=\"{REFRESH_SECONDS}; URL='/?bm-verify={tok}'\"" in page  # no-JS path
     r = await http.post(
-        "/_sec/verify?provider=interstitial",
-        json={"bm-verify": token_of(page), "pow": basic_answer(page)},
+        "/_sec/verify?provider=interstitial", json={"bm-verify": tok, "pow": basic_answer(page)}
     )
     assert r.status_code == 200 and r.json()["ok"] and r.json()["provider"] == "interstitial"
+    assert "location" not in r.json()  # LOW flag pow_interstitial_location is off
     assert {"_abck", "ak_bmsc"} <= set(r.cookies)  # lab cookie issuance (bm_sz already sent)
     sig = await mod.evaluate(ctx_for(http, make_ctx))
-    # a regex solves the basic page without JavaScript: WARN, never PASS
-    assert sig.verdict == Verdict.WARN and sig.score == 30 and "regex" in sig.reason
+    # a regex solves the basic page without JavaScript: WARN in the cautious band, never PASS
+    assert sig.verdict == Verdict.WARN and sig.score == INTERSTITIAL_SCORE == 20
+    assert "regex" in sig.reason
     assert await mod.challenge_satisfied(ctx_for(http, make_ctx), "interstitial")
     assert not await mod.challenge_satisfied(ctx_for(http, make_ctx), "crypto")
 
@@ -486,7 +499,27 @@ def test_safe_location_guard() -> None:
         assert safe_location(bad) is None
 
 
-async def test_location_only_when_same_origin(http: httpx.AsyncClient) -> None:
+async def test_basic_interstitial_numbers_follow_the_observed_shape(
+    http: httpx.AsyncClient, clock: Clock
+) -> None:
+    """Observed: ``var i = 1789910678; var j = i + Number("3886" + "11036");`` where i is the
+    issuing Unix time (2026-09-20 UTC) and the answer no longer fits a 32-bit int."""
+    clock.t = 1789910678.4
+    page = await get_interstitial(http)
+    i = int(re.search(r"var i = (\d+);", page).group(1))  # type: ignore[union-attr]
+    a, b = BASIC_RE.search(page).groups()  # type: ignore[union-attr]
+    assert i == 1789910678 and (len(a), len(b)) == (4, 5)
+    r = await http.post("/_sec/verify", json={"bm-verify": token_of(page), "pow": i + int(a + b)})
+    assert r.status_code == 200
+
+
+async def test_location_only_with_the_low_flag_and_same_origin(http: httpx.AsyncClient) -> None:
+    page = await get_interstitial(http, return_to="/protected/all?x=1")
+    r = await http.post(
+        "/_sec/verify", json={"bm-verify": token_of(page), "pow": basic_answer(page)}
+    )
+    assert "location" not in r.json()  # off by default: the observed flow reloads
+    await http.put("/api/flags/pow_interstitial_location", json={"value": True})
     page = await get_interstitial(http, return_to="/protected/all?x=1")
     r = await http.post(
         "/_sec/verify", json={"bm-verify": token_of(page), "pow": basic_answer(page)}
@@ -507,24 +540,91 @@ async def test_cookieless_gate_serves_the_page_and_solving_clears_it(
     await http.put("/api/flags/pow_cookieless_gate", json={"value": True})
     app = http.app  # type: ignore[attr-defined]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
-        r = await c.get("/", headers={"accept": "text/html"})
+        r = await c.get("/", headers=HTML)
         assert (
             r.status_code == 200
             and '"bm-verify"' in r.text
             and "Protected Storefront" not in r.text
         )
-        assert {"bm_sz", "_abck", "ak_bmsc"} <= set(c.cookies)  # issued with the interstitial
-        # JSON/XHR callers and non-navigations are not gated
-        assert "Protected Storefront" not in r.text
+        assert f"URL='/?bm-verify={token_of(r.text)}'" in r.text  # meta refresh, same URL
+        # issued with the interstitial (the lab binds the token to bm_sz), so they prove nothing
+        assert {"bm_sz", "_abck", "ak_bmsc"} <= set(c.cookies)
+        again = await c.get("/", headers=HTML)  # a reload with those cookies, nothing solved
+        assert '"bm-verify"' in again.text and "Protected Storefront" not in again.text
         v = await c.post(
             "/_sec/verify?provider=interstitial",
-            json={"bm-verify": token_of(r.text), "pow": basic_answer(r.text)},
+            json={"bm-verify": token_of(again.text), "pow": basic_answer(again.text)},
         )
-        assert v.json()["ok"] and v.json()["location"] == "/"
-        after = await c.get("/", headers={"accept": "text/html"})  # the page's reload
+        assert v.json()["ok"] and "location" not in v.json()  # the page just reloads
+        after = await c.get("/", headers=HTML)  # the page's reload
         assert "Protected Storefront" in after.text
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
         assert "Protected Storefront" in (await c.get("/")).text  # no text/html accept: not gated
+
+
+
+async def test_solved_interstitial_is_monitored_not_rechallenged(http: httpx.AsyncClient) -> None:
+    """WARN 20 sits in the cautious band: the protected page is served under monitoring (the
+    captures show a cleared session getting the real page), but the signal never PASSes."""
+    before = (await http.get("/protected/proof_of_work")).json()
+    assert before["report"]["action"] == "challenge"  # unsolved: FAIL 45, strict band
+    page = await get_interstitial(http)
+    await http.post("/_sec/verify", json={"bm-verify": token_of(page), "pow": basic_answer(page)})
+    report = (await http.get("/protected/proof_of_work")).json()["report"]
+    sig = next(s for s in report["signals"] if s["module"] == "proof_of_work")
+    assert (sig["verdict"], sig["score"]) == ("warn", INTERSTITIAL_SCORE)
+    assert (report["segment"], report["action"]) == ("cautious", "monitor")
+
+
+async def test_cookieless_gate_cleared_by_sec_cpt_or_validated_abck(
+    http: httpx.AsyncClient, clock: Clock
+) -> None:
+    """Server-side proof clears the gate: a valid sec_cpt (hard proof of work) or an _abck the
+    sensor flow validated, as well as a solved interstitial."""
+    await http.put("/api/flags/pow_cookieless_gate", json={"value": True})
+    assert '"bm-verify"' in (await http.get("/", headers=HTML)).text  # SID has no proof yet
+    ch = await issue(http)
+    clock.t += 2
+    assert (await verify(http, ch)).status_code == 200  # sec_cpt now in the jar
+    assert "Protected Storefront" in (await http.get("/", headers=HTML)).text
+    app = http.app  # type: ignore[attr-defined]
+    other = "c" * 32 + "~cafebabe"
+    await mark_abck_validated(app.state.store, other)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t", cookies={"bm_sz": other}
+    ) as c:
+        assert "Protected Storefront" in (await c.get("/", headers=HTML)).text
+
+
+async def test_meta_refresh_token_admits_one_navigation_after_the_wait(
+    http: httpx.AsyncClient, clock: Clock
+) -> None:
+    """No JavaScript: following the page's meta refresh after the delay passes the gate once."""
+    await http.put("/api/flags/pow_cookieless_gate", json={"value": True})
+    app = http.app  # type: ignore[attr-defined]
+
+    def client(cookies: dict[str, str] | None = None) -> httpx.AsyncClient:
+        transport = httpx.ASGITransport(app=app)
+        return httpx.AsyncClient(transport=transport, base_url="http://t", cookies=cookies)
+
+    async with client() as c:
+        tok = token_of((await c.get("/", headers=HTML)).text)
+        early = await c.get(f"/?bm-verify={tok}", headers=HTML)
+        assert '"bm-verify"' in early.text  # the time penalty: too early, token kept
+        clock.t += REFRESH_SECONDS
+        async with client(cookies={"bm_sz": "d" * 32 + "~00000001"}) as stranger:
+            assert '"bm-verify"' in (await stranger.get(f"/?bm-verify={tok}", headers=HTML)).text
+        passed = await c.get(f"/?bm-verify={tok}", headers=HTML)
+        assert "Protected Storefront" in passed.text  # one page, no JavaScript
+        replay = await c.get(f"/?bm-verify={tok}", headers=HTML)
+        assert '"bm-verify"' in replay.text  # single use
+        assert '"bm-verify"' in (await c.get("/", headers=HTML)).text  # nothing was cleared
+    async with client() as c:  # the observed refetch needs no cookies
+        tok = token_of((await c.get("/", headers=HTML)).text)
+        clock.t += REFRESH_SECONDS
+        async with client() as cookieless:
+            refetch = await cookieless.get(f"/?bm-verify={tok}", headers=HTML)
+            assert "Protected Storefront" in refetch.text
 
 
 async def test_challenge_action_with_interstitial_provider(http: httpx.AsyncClient) -> None:
@@ -652,11 +752,25 @@ async def test_challenge_satisfied_is_scoped_to_own_providers(
     assert not await mod.challenge_satisfied(ctx, "interactive")
 
 
-def test_interstitial_script_does_not_reload_the_on_demand_route() -> None:
-    """Reloading /akam/proof_of_work/interstitial would mint a fresh page forever."""
-    from app.modules.proof_of_work import INTERSTITIAL_PAGE_PATH, render_interstitial
+ARITH = 'var i = 1; var j = i + Number("2" + "3");'
 
-    page = render_interstitial("TOK", 'var i = 1; var j = i + Number("2" + "3");', "j")
-    assert "location.replace(l)" in page  # same-origin location is followed first
-    assert f'location.pathname==="{INTERSTITIAL_PAGE_PATH}"' in page
-    assert 'location.replace("/")' in page
+
+def test_interstitial_script_reloads_except_on_the_on_demand_route() -> None:
+    """The gate's page reloads (as observed); reloading /akam/proof_of_work/interstitial would
+    mint a fresh page forever, so that route's page goes to its return path instead."""
+    from app.modules.proof_of_work import render_interstitial
+
+    gate = render_interstitial("TOK", ARITH, "j", refresh_url="/x?bm-verify=TOK")
+    assert "location.reload()" in gate and "location.replace(l)" in gate  # location: LOW flag
+    assert "content=\"5; URL='/x?bm-verify=TOK'\"" in gate
+    demand = render_interstitial("TOK", ARITH, "j", refresh_url="/?bm-verify=TOK", after="/x")
+    assert 'location.replace("/x")' in demand and "location.reload()" not in demand
+
+
+def test_interstitial_page_escapes_the_challenged_url() -> None:
+    from app.modules.proof_of_work import render_interstitial, with_token
+
+    evil = "/p\"><script>alert(1)</script>?q='x"
+    page = render_interstitial("TOK", ARITH, "j", refresh_url=with_token(evil, "TOK"), after=evil)
+    assert "<script>alert(1)" not in page and page.count("</script>") == 1
+    assert with_token("/a?bm-verify=old&x=1", "NEW") == "/a?x=1&bm-verify=NEW"

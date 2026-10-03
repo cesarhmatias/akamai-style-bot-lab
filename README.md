@@ -133,7 +133,8 @@ per-signal reasons, how a failing client would pass, and the before/after note f
   catch both overrides.
 - **pow_interstitial** rows: the cookieless `bm-verify` arithmetic interstitial (flag `pow_cookieless_gate`, plus the LAB flag
   `pow_interstitial_hardened` for the second row). A regex-only curl_cffi solves the basic page (⚠️: solving it is weak evidence,
-  WARN 30) and is stopped by the randomized hardened shape (❌); Playwright runs the page's own script (⚠️). See
+  WARN 20, served under monitoring) and is stopped by the randomized hardened shape (❌); Playwright runs the page's own script
+  (⚠️). See
   [proof_of_work](docs/cases/proof_of_work.md#cookieless-bm-verify-interstitial).
 - The Playwright and curl_cffi versions are pinned in `pyproject.toml` because the Playwright JA4 depends on the bundled
   Chromium build.
@@ -168,7 +169,8 @@ environment variable `LAB_FLAG_<NAME>`, then the default. `GET /api/flags` lists
 | `rate_id_ip_useragent` | off | high | `ip_reputation` | rate-control identifier = IP + User-Agent |
 | `rate_id_tls_fingerprint` | off | high | `ip_reputation` | rate-control identifier = JA4 |
 | `akamai_ghost_server_header` | **on** | medium | engine | send `Server: AkamaiGHost` on deny pages |
-| `pow_cookieless_gate` | off | medium | `proof_of_work` | serve the `bm-verify` interstitial to navigations without `bm_sz`/`_abck` |
+| `pow_cookieless_gate` | off | medium | `proof_of_work` | serve the `bm-verify` interstitial to HTML navigations until the session has server-side proof |
+| `pow_interstitial_location` | off | low | `proof_of_work` | add a same-origin JSON `location` to the interstitial's verify reply (unverified) |
 | `pow_interstitial_hardened` | off | lab | `proof_of_work` | randomize the interstitial's arithmetic shape (lab device) |
 | `abck_tilde0_mode` | off | low | `abck_cookie` | `_abck` flips to `~0~`; a forged `~0~` is a BLOCK |
 | `abck_n_posts` | off | low | `abck_cookie` | validity needs N sensor posts (default 3) |
