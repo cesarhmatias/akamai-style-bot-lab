@@ -182,6 +182,7 @@ class RequestContext(BaseModel):
     endpoint_class: EndpointClass = EndpointClass.PROTECTED
     body_sha256: str = ""  # hex sha256 of the raw request body ("" for GET)
     query: dict[str, str] = Field(default_factory=dict)
+    body: bytes = b""  # raw request body (POST/PUT/PATCH, capped at 64 KiB; b"" for GET)
     flags: dict[str, bool] = Field(default_factory=dict)  # resolved feature flags (FlagSpec)
 
     def flag(self, name: str) -> bool:
@@ -246,6 +247,23 @@ class DetectionModule(ABC):
     # v2.1: challenge providers this module can serve (e.g. {"crypto", "adaptive"}); the
     # response policy's ``challenge_provider`` picks the enabled module that lists it.
     challenge_providers: ClassVar[frozenset[str]] = frozenset()
+
+    async def challenge_satisfied(self, ctx: RequestContext, provider: str | None = None) -> bool:
+        """v2.1: challenge providers only. True when this request carries valid proof that
+        the session solved this module's challenge recently (cookie AND store state). The
+        engine then downgrades a ``challenge`` action to monitor instead of looping."""
+        return False
+
+    async def after_score(self, ctx: RequestContext, report: ScoreReport) -> None:
+        """v2.1: called on every enabled module after the engine has scored and decided an
+        action (``report.segment`` / ``report.action`` are final). Use it to learn from the
+        outcome (profiles) or to arm follow-up work (step-up collection). Must not raise."""
+        return None
+
+    async def pre_request(self, request: Any, ctx: RequestContext) -> Any | None:
+        """v2.1: access-control gate run BEFORE scoring on page and protected requests
+        (e.g. a waiting room). Return a Response to short-circuit, or None to continue."""
+        return None
 
     async def issue_challenge(
         self, request: Any, ctx: RequestContext, provider: str, *, html: bool
