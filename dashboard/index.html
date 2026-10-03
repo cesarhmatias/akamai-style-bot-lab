@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Detection Lab</title>
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1020'/%3E%3Cpath d='M16 6l9 4v6c0 5-4 9-9 10-5-1-9-5-9-10v-6z' fill='none' stroke='%2334d399' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top">
+  <div class="brand">
+    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4l11 5v7c0 6-4.5 10.5-11 12C9.500 26.500 5 22 5 16V9z" fill="none" stroke="var(--pass)" stroke-width="2"/><circle cx="16" cy="15" r="3" fill="var(--pass)"/></svg>
+    <div><h1>Bot Detection Lab</h1><p>Local Akamai-style simulator</p></div>
+  </div>
+  <div class="stats" aria-live="polite">
+    <div class="stat"><span id="st-total">0</span><label>requests</label></div>
+    <div class="stat"><span id="st-blocked">0%</span><label>blocked</label></div>
+    <div class="stat"><span id="st-avg">0</span><label>avg score</label></div>
+  </div>
+  <div class="actions">
+    <span id="conn" class="conn off" role="status"><i></i><b>connecting</b></span>
+    <a class="btn" href="https://localhost:8443/" target="_blank" rel="noopener" title="Opens the protected storefront served by the edge with a self-signed certificate. Accept the browser warning once (Advanced, Proceed).">Open storefront ↗</a>
+    <button class="btn danger" id="reset">Reset lab</button>
+  </div>
+</header>
+<div id="banner" class="banner" hidden>API unreachable, reconnecting…</div>
+<main id="main">
+  <section aria-labelledby="h-cases">
+    <h2 id="h-cases">Cases</h2>
+    <p class="hint">Test opens the protected resource in your real browser so JS challenges run (the dashboard origin cannot call it cross-origin because of the self-signed certificate). First visit: accept the certificate warning at <code>https://localhost:8443/</code>.</p>
+    <div id="cases" class="cases"></div>
+  </section>
+
+  <div class="split">
+    <section class="panel feed" aria-labelledby="h-feed">
+      <h2 id="h-feed">Live feed</h2>
+      <div class="feed-head"><span>Time</span><span>Client</span><span>Method</span><span>Path</span><span>Score</span><span></span></div>
+      <div id="feed" class="feed-body" role="listbox" aria-label="Requests" tabindex="0"></div>
+    </section>
+    <section class="panel detail" aria-labelledby="h-detail">
+      <h2 id="h-detail">Selected request</h2>
+      <div id="detail"><p class="empty">Select a request from the feed.</p></div>
+    </section>
+  </div>
+
+  <section class="panel" aria-labelledby="h-cmp">
+    <div class="cmp-head">
+      <h2 id="h-cmp">Browser vs scraper</h2>
+      <label>Case <select id="cmp-case"></select></label>
+    </div>
+    <p class="hint">To populate: click <b>Test</b> on a case in your browser, then run <code>python -m clients.run_matrix</code>.</p>
+    <div id="cmp"></div>
+  </section>
+</main>
+<footer>Educational, local-only lab. Test only against your own server.</footer>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
