@@ -19,6 +19,7 @@
     <div class="stat"><span id="st-total">0</span><label>requests</label></div>
     <div class="stat"><span id="st-blocked">0%</span><label>blocked</label></div>
     <div class="stat"><span id="st-avg">0</span><label>avg score</label></div>
+    <div class="stat dist"><div id="st-dist-bar" class="dist-bar" role="img" aria-label="No requests yet"></div><div id="st-dist-legend" class="dist-legend"></div><label>actions</label></div>
   </div>
   <div class="actions">
     <span id="conn" class="conn off" role="status"><i></i><b>connecting</b></span>
@@ -26,18 +27,21 @@
     <button class="btn danger" id="reset">Reset lab</button>
   </div>
 </header>
-<div id="banner" class="banner" hidden>API unreachable, reconnecting…</div>
+<div id="banner" class="banner" hidden role="alert">API unreachable, reconnecting…</div>
+<nav class="subnav" aria-label="Sections"><a href="#h-cases">Cases</a><a href="#h-feed">Live feed</a><a href="#h-cmp">Compare</a><a href="#h-policy">Policy</a><a href="#h-flags">Flags</a></nav>
 <main id="main">
   <section aria-labelledby="h-cases">
     <h2 id="h-cases">Cases</h2>
     <p class="hint">Test opens the protected resource in your real browser so JS challenges run (the dashboard origin cannot call it cross-origin because of the self-signed certificate). First visit: accept the certificate warning at <code>https://localhost:8443/</code>.</p>
+    <div id="legend"></div>
+    <div id="cases-bar"></div>
     <div id="cases" class="cases"></div>
   </section>
 
   <div class="split">
     <section class="panel feed" aria-labelledby="h-feed">
-      <h2 id="h-feed">Live feed</h2>
-      <div class="feed-head"><span>Time</span><span>Client</span><span>Method</span><span>Path</span><span>Score</span><span></span></div>
+      <div class="cmp-head"><h2 id="h-feed">Live feed</h2><label>Show <select id="feed-filter" aria-label="Filter feed by action"></select></label></div>
+      <div class="feed-head"><span>Time</span><span>Client</span><span>Request</span><span>Action</span><span>Segment</span><span>Score</span></div>
       <div id="feed" class="feed-body" role="listbox" aria-label="Requests" tabindex="0"></div>
     </section>
     <section class="panel detail" aria-labelledby="h-detail">
@@ -51,10 +55,23 @@
       <h2 id="h-cmp">Browser vs scraper</h2>
       <label>Case <select id="cmp-case"></select></label>
     </div>
-    <p class="hint">To populate: click <b>Test</b> on a case in your browser, then run <code>python -m clients.run_matrix</code>.</p>
+    <p class="hint">Latest request per client for the selected case. To populate: click <b>Test</b> on a case in your browser, then run <code>python -m clients.run_matrix</code>.</p>
     <div id="cmp"></div>
   </section>
+
+  <details class="panel fold" id="sec-policy" open>
+    <summary><h2 id="h-policy">Response policy</h2><span class="meta">Bot Score bands, segment to action, parameters</span></summary>
+    <div id="policy"><p class="empty">Loading…</p></div>
+  </details>
+
+  <details class="panel fold" id="sec-flags" open>
+    <summary><h2 id="h-flags">Feature flags</h2><span class="meta" id="flags-count"></span></summary>
+    <p class="hint"><b>LOW</b> flags gate behaviour that only vendor sources describe. They default to off; turning one on makes the lab behave in a way that is <b>unverified</b> against real Akamai.</p>
+    <div id="flags-bar"></div>
+    <div id="flags" class="flags"><p class="empty">Loading…</p></div>
+  </details>
 </main>
+<div id="toasts" class="toasts" aria-live="polite"></div>
 <footer>Educational, local-only lab. Test only against your own server.</footer>
 <script type="module" src="js/app.js"></script>
 </body>
