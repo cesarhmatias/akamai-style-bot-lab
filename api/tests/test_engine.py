@@ -50,7 +50,9 @@ async def test_run_single_and_all(
     one = await eng.evaluate(make_ctx(), slug="a")
     assert [s.module for s in one.signals] == ["a"] and one.score == 30
     allr = await eng.evaluate(make_ctx())
-    assert allr.score == 35 and not allr.blocked
+    # 35 is the "strict" segment, whose default protected action is a challenge (blocked);
+    # before the Bot Score policy this was below the flat 50 threshold and passed
+    assert allr.score == 35 and allr.segment == "strict" and allr.blocked
 
 
 async def test_toggle_and_default_disabled(

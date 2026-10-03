@@ -37,3 +37,14 @@ def test_make_store_selects(monkeypatch) -> None:  # type: ignore[no-untyped-def
     assert isinstance(make_store(), MemoryStore)
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     assert type(make_store()).__name__ == "RedisStore"
+
+
+async def test_sliding_window(memory_store: MemoryStore) -> None:
+    from app.store import window_add, window_count
+
+    assert await window_count(memory_store, "w", 60, now=100.0) == 0
+    assert await window_add(memory_store, "w", 60, now=100.0) == 1
+    assert await window_add(memory_store, "w", 60, now=130.0) == 2
+    assert await window_count(memory_store, "w", 60, now=150.0) == 2
+    assert await window_count(memory_store, "w", 60, now=170.0) == 1  # first fell out
+    assert await window_add(memory_store, "w", 60, now=400.0) == 1

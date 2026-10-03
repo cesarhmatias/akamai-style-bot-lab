@@ -9,7 +9,7 @@ import pkgutil
 from collections.abc import Iterable
 
 from . import modules as modules_pkg
-from .contract import DetectionModule, FlagSpec, SessionStore
+from .contract import Confidence, DetectionModule, FlagSpec, SessionStore
 
 
 def discover_modules() -> list[DetectionModule]:
@@ -87,4 +87,13 @@ class Registry:
 
 
 # Engine-level flags (not owned by a module) are declared here.
-ENGINE_FLAGS: list[FlagSpec] = []
+ENGINE_FLAGS: list[FlagSpec] = [
+    FlagSpec(
+        name="akamai_ghost_server_header",
+        description="Send 'Server: AkamaiGHost' on deny pages. Vendor-cited and widely observed, "
+        "but in a 2026 measurement 103 of 110 blocked Akamai sites showed no branding at all.",
+        confidence=Confidence.MEDIUM,
+        default=True,
+        source="audit §2.13",
+    )
+]
