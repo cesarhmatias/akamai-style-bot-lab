@@ -47,7 +47,7 @@ async def test_protected_block_pass_and_cookies() -> None:
         assert (await c.get("/akam/fixed/fixed.js")).text == "//js"
 
 
-async def test_edge_headers_and_html_interstitial() -> None:
+async def test_edge_headers_and_html_deny_page() -> None:
     c, _ = mk()
     async with c:
         h = {"x-ja3-hash": "abc", "x-client-ip": "9.9.9.9", "x-header-order": "Host,Accept"}
@@ -56,7 +56,8 @@ async def test_edge_headers_and_html_interstitial() -> None:
         assert rep["fingerprint"]["header_order"] == "Host,Accept"
         assert all(k != "x-ja3-hash" for k, _ in rep["headers"])
         r = await c.get("/protected/fixed", headers={"accept": "text/html"})
-        assert r.status_code == 403 and "/akam/fixed/fixed.js" in r.text
+        # v2: a deny is the Akamai-style 403 page (no scripts), not a script-bearing interstitial
+        assert r.status_code == 403 and "Access Denied" in r.text and "Reference" in r.text
 
 
 async def test_landing_includes_scripts() -> None:

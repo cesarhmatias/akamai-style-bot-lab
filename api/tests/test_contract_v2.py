@@ -78,9 +78,10 @@ async def test_applies_to_filters_all_but_not_single_slug() -> None:
 
 async def test_flags_endpoint_toggles_behaviour(monkeypatch: Any) -> None:
     async with mk() as c:
-        flags = (await c.get("/api/flags")).json()
-        assert flags[0]["name"] == "hooked_strict" and flags[0]["value"] is False
-        assert flags[0]["confidence"] == "low"
+        flags = {f["name"]: f for f in (await c.get("/api/flags")).json()}
+        assert flags["hooked_strict"]["value"] is False
+        assert flags["hooked_strict"]["confidence"] == "low"
+        assert flags["akamai_ghost_server_header"]["value"] is True  # engine-level, MEDIUM
         assert (await c.get("/protected/hooked")).status_code == 200
         assert (await c.put("/api/flags/hooked_strict", json={"value": True})).status_code == 200
         assert (await c.get("/protected/hooked")).status_code == 403
