@@ -120,12 +120,28 @@
   var nativeFetch = W.fetch;
   if (nativeFetch) {
     W.fetch = function (input, init) {
+      var self = this;
       try {
         var url = typeof input === 'string' || !input || !input.url ? input : input.url;
         var method = String((init && init.method) || (input && input.method) || 'GET')
           .toUpperCase();
         var path = pathOf(url);
         if (method !== 'GET' && isTarget(path)) {
+          var initBody = init && init.body !== undefined && init.body !== null;
+          if (!initBody && input && typeof input.clone === 'function' &&
+              typeof input.text === 'function') {
+            // fetch(new Request(...)): the body lives in the Request, not in init (the AJAX
+            // injection helper wraps every call that way). Read a clone so the request hash
+            // binds the bytes that are really sent; hashing "" would make every such call a
+            // hash mismatch.
+            return input.clone().text().then(function (text) {
+              var rh = new Headers((init && init.headers) || input.headers || undefined);
+              rh.set(HEADER, header(method, path, text));
+              var ropts = init ? Object.assign({}, init) : {};
+              ropts.headers = rh;
+              return nativeFetch.call(self, input, ropts);
+            });
+          }
           var opts = init ? Object.assign({}, init) : {};
           var hdrs = new Headers(opts.headers || (input && input.headers) || undefined);
           var body = typeof opts.body === 'string' ? opts.body : String(opts.body || '');

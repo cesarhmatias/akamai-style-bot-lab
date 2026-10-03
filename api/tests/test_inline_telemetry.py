@@ -303,3 +303,51 @@ async def test_page_script_attaches_verifiable_telemetry(
     # the same header presented on /api/login is a different request
     swapped = verify_header(out["checkout"], path="/api/login", now_ms=int(xfields["t"]), **kw)
     assert swapped.kind == "hash_mismatch"
+
+
+REQUEST_DRIVER = """
+function Req(url, body) {
+  this.url = url; this.method = 'POST'; this.b = body;
+  this.headers = new Headers({'content-type': 'application/json'});
+}
+Req.prototype.clone = function () { return this; };
+Req.prototype.text = function () {  // synchronous thenable: the stub has no event loop
+  var b = this.b;
+  return { then: function (f) { return f(b); } };
+};
+var req = new Req('/api/checkout', BODY_TEXT);
+fetch(req);                               // what ajax_inject.js does: fetch(new Request(...))
+var c = calls.filter(function (x) { return x.fetch; })[0];
+result = {
+  header: c.init.headers.get('akamai-bm-telemetry'),
+  ct: c.init.headers.get('content-type'),
+  sameInput: c.input === req
+};
+"""
+
+
+async def test_page_script_hashes_the_body_of_a_request_object(
+    make_ctx: Callable[..., RequestContext], tmp_path: Path
+) -> None:
+    """Regression: the AJAX injection helper wraps every call as ``fetch(new Request(...))``,
+    so the body is not in ``init``. Hashing "" there made every browser login/checkout a
+    hash_mismatch BLOCK. The wrapper must read the Request's body instead."""
+    mod = mk()
+    cfg_tag, script_tag = await mod.page_snippets(make_ctx(session_id=SID))
+    body_text = '{"qty":1}'
+    out = run_js(
+        tmp_path,
+        [_js_of(cfg_tag), _js_of(script_tag)],
+        REQUEST_DRIVER.replace("BODY_TEXT", json.dumps(body_text)),
+    )
+    assert out["sameInput"] and out["ct"] == "application/json"
+    fields = parse_header(out["header"]) or {}
+    res = verify_header(
+        out["header"],
+        sid=SID,
+        method="POST",
+        path="/api/checkout",
+        body_sha256=hashlib.sha256(body_text.encode()).hexdigest(),
+        now_ms=int(fields["t"]),
+    )
+    assert res.ok, res.reason
