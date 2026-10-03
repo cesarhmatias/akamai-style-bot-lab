@@ -1,19 +1,11 @@
-[![CI](https://github.com/<your-user>/<your-repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-user>/<your-repo>/actions/workflows/ci.yml)
-[![coverage](https://codecov.io/gh/<your-user>/<your-repo>/branch/main/graph/badge.svg)](https://codecov.io/gh/<your-user>/<your-repo>)
+[![CI](https://github.com/cesarhmatias/akamai-style-bot-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/cesarhmatias/akamai-style-bot-lab/actions/workflows/ci.yml)
+[![coverage](https://codecov.io/gh/cesarhmatias/akamai-style-bot-lab/branch/main/graph/badge.svg)](https://codecov.io/gh/cesarhmatias/akamai-style-bot-lab)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue?logo=python&logoColor=white)](pyproject.toml)
 [![Go edge](https://img.shields.io/badge/edge-Go%201.23-00ADD8?logo=go&logoColor=white)](edge/)
 [![Ruff](https://img.shields.io/badge/lint-ruff-261230?logo=ruff&logoColor=white)](pyproject.toml)
 [![Docker Compose](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Playwright](https://img.shields.io/badge/tested%20with-playwright-45ba4b?logo=playwright&logoColor=white)](clients/playwright_client.py)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-
-> After you create the GitHub remote, replace `<your-user>/<your-repo>` in the CI and coverage badge URLs above
-> (the other badges are static and work as-is). The coverage badge uses Codecov: it needs the repo on Codecov
-> and, for pushes to a repo you own, a `CODECOV_TOKEN` repository secret (the upload step does not fail CI without it).
-> Each badge maps to something real: the CI workflow (`.github/workflows/ci.yml`, which also runs `go vet` and `go test`
-> for the edge), Python 3.12 (`pyproject.toml`, CI), the Go 1.23 module in `edge/`, Ruff (CI lint job), Docker Compose,
-> the Playwright client and the MIT licence file.
-> Local coverage today: 96.85% (`fail_under = 90`).
 
 # Akamai-style bot detection lab
 
