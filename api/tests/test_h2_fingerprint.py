@@ -74,3 +74,52 @@ def test_single_deviation_warns():
 def test_malformed():
     assert run("garbage").verdict == Verdict.FAIL
     assert parse_h2("a|b|c|d") is None
+
+
+SAFARI_MAC_FP = "2:0;3:100;4:2097152;9:1|10420225|0|m,s,a,p"
+SAFARI_IOS_FP = "2:0;3:100;4:2097152;8:1;9:1|10420225|0|m,s,a,p"
+OLD_SAFARI_FP = "2:0;3:100;4:2097152|10485760|0|m,s,p,a"
+SAFARI_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+    "Version/18.3 Safari/605.1.15"
+)
+IOS_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1"
+)
+IOS_BROWSER_UAS = [
+    IOS_UA.replace("Version/18.3", "CriOS/131.0.6778.103"),
+    IOS_UA.replace("Version/18.3", "FxiOS/135.0"),
+    IOS_UA.replace("Version/18.3", "Version/18.0 EdgiOS/131.0.2903.92"),
+]
+
+
+def test_safari_macos_and_ios_profiles_pass():
+    for ua in (SAFARI_UA, IOS_UA):
+        for fp in (SAFARI_MAC_FP, SAFARI_IOS_FP):
+            s = run(fp, ua)
+            assert s.verdict == Verdict.PASS and s.score == 0, (ua, fp)
+
+
+def test_ios_browsers_compared_with_safari_profile():
+    for ua in IOS_BROWSER_UAS:
+        assert run(SAFARI_IOS_FP, ua).verdict == Verdict.PASS, ua
+        assert run(CHROME_FP, ua).verdict == Verdict.FAIL, ua
+
+
+def test_pre_2024_safari_profile_no_longer_matches():
+    assert run(OLD_SAFARI_FP, SAFARI_UA).verdict != Verdict.PASS
+
+
+def test_safari_fp_with_chrome_ua_fails():
+    assert run(SAFARI_MAC_FP, CHROME_UA).verdict == Verdict.FAIL
+
+
+def test_firefox_current_profile_without_priority_tree():
+    assert run("1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s", FF_UA).verdict == Verdict.PASS
+
+
+def test_absent_window_update_accepts_00_and_0():
+    assert parse_h2("1:65536|00|0|m,a,s,p")["window_update"] == 0
+    assert parse_h2("1:65536|0|0|m,a,s,p")["window_update"] == 0
+    assert parse_h2("1:65536|-|0|m,a,s,p")["window_update"] == 0

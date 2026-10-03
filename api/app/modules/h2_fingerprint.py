@@ -10,7 +10,8 @@ e.g. Chrome ``1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p``.
 Empty means the client spoke HTTP/1.1.
 
 How this lab detects it: the fingerprint is parsed and compared per component against
-the profile of the browser the User-Agent claims (Chrome or Firefox profiles below),
+the profile of the browser the User-Agent claims (Chrome, Firefox or Safari profiles
+below; Safari = macOS and iOS variants, and every iOS browser counts as Safari),
 with a breakdown in ``details``. HTTP/1.1 with a Chrome/Firefox UA fails, because real
 browsers negotiate h2 over TLS. How a client passes: use an HTTP/2 stack that mimics
 the browser (``curl_cffi`` impersonate, or a real browser).
@@ -18,6 +19,7 @@ the browser (``curl_cffi`` impersonate, or a real browser).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from app.contract import DetectionModule, RequestContext, Signal, Verdict
@@ -33,8 +35,13 @@ class H2Profile:
 PROFILES: dict[str, H2Profile] = {
     "chrome": H2Profile({1: 65536, 2: 0, 4: 6291456, 6: 262144}, 15663105, "m,a,s,p"),
     "firefox": H2Profile({1: 65536, 2: 0, 4: 131072, 5: 16384}, 12517377, "m,p,a,s"),
-    "safari": H2Profile({2: 0, 3: 100, 4: 2097152}, 10485760, "m,s,p,a"),
+    # Safari 18 (2024-26 values; the pre-2024 profile used WU 10485760 and m,s,p,a).
+    # Id 9 = NO_RFC7540_PRIORITIES, id 8 = ENABLE_CONNECT_PROTOCOL (sent by iOS builds).
+    "safari": H2Profile({2: 0, 3: 100, 4: 2097152, 9: 1}, 10420225, "m,s,a,p"),
+    "safari-ios": H2Profile({2: 0, 3: 100, 4: 2097152, 8: 1, 9: 1}, 10420225, "m,s,a,p"),
 }
+# A Safari-claiming UA is compared with every WebKit profile and scored by the best match.
+PROFILE_GROUPS: dict[str, tuple[str, ...]] = {"safari": ("safari", "safari-ios")}
 
 # Points per component (sum = 100 cap).
 W_SETTINGS_IDS = 30
@@ -54,6 +61,7 @@ def parse_h2(fp: str) -> dict | None:
             if item:
                 k, v = item.split(":")
                 settings.append((int(k), int(v)))
+        # Absent WINDOW_UPDATE: "00" in the Akamai paper, "0" in modern tools.
         wu = int(parts[1]) if parts[1] not in ("", "-") else 0
     except ValueError:
         return None
@@ -80,6 +88,10 @@ def compare(parsed: dict, prof: H2Profile) -> dict[str, int]:
 
 def claimed_browser(ua: str) -> str:
     low = ua.lower()
+    # Every iOS browser (CriOS, FxiOS, EdgiOS, ...) runs on WebKit's network stack, so its
+    # HTTP/2 connection looks like Safari's whatever the brand token says.
+    if re.search(r"crios/|fxios/|edgios/|iphone|ipad|ipod", low):
+        return "safari"
     if "firefox/" in low:
         return "firefox"
     if "chrome/" in low or "chromium/" in low or "edg/" in low:  # incl. HeadlessChrome
@@ -112,9 +124,13 @@ class H2FingerprintModule(DetectionModule):
             return self.signal(Verdict.FAIL, 80, "Malformed HTTP/2 fingerprint", fp=fp)
         # Non-browser UA: compare to Chrome (the profile bots try to mimic).
         target = claimed if claimed in PROFILES else "chrome"
-        breakdown = compare(parsed, PROFILES[target])
+        scored = {
+            name: compare(parsed, PROFILES[name]) for name in PROFILE_GROUPS.get(target, (target,))
+        }
+        best = min(scored, key=lambda n: sum(scored[n].values()))
+        breakdown = scored[best]
         score = min(100, sum(breakdown.values()))
-        d = {"profile": target, "breakdown": breakdown, "fp": fp}
+        d = {"profile": target, "variant": best, "breakdown": breakdown, "fp": fp}
         if score == 0:
             if claimed == "other":
                 return self.signal(Verdict.PASS, 0, "H2 matches Chrome profile", **d)
