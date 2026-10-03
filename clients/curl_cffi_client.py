@@ -14,6 +14,11 @@ What it does with pure HTTP and no script engine:
   ``/akam/<n>/<hex8>`` script path, then POST ``p=<ts_ms>.<digest>`` to
   ``/akam/<n>/pixel_<hex8>`` (the digest recipe is the pixel module's documented, lab-defined
   one, which the served script also computes);
+* the BASIC cookieless interstitial, with regexes only (no JavaScript is run): it reads
+  ``var i = N;``, ``var j = i + Number("A" + "B");`` and the ``"bm-verify"`` token from the page,
+  POSTs ``{"bm-verify": token, "pow": N + int(A+B)}`` to ``/_sec/verify?provider=interstitial``
+  and follows only a same-origin ``location``. When the page does not look like that (the
+  hardened variant) it stops with a clear reason instead of guessing;
 * login / checkout WITHOUT inline telemetry (it cannot run the page script that attaches it);
 * ``native_app``: acts as a native mobile app. It re-implements the lab's documented
   ``X-acf-sensor-data`` header (shared lab app key, synthetic motion stream) because an app
@@ -34,10 +39,23 @@ import random
 import re
 import time
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 from curl_cffi import requests as cffi
 
-from .common import CASES, LAB_URL, MOBILE_PATH, CaseResult, row_env, run_http_case
+from .common import (
+    CASE_TABLE,
+    CASES,
+    INTERSTITIAL_PATH,
+    INTERSTITIAL_RETURN_TO,
+    LAB_URL,
+    MOBILE_PATH,
+    REPORT_ID_HEADER,
+    CaseResult,
+    judge,
+    row_env,
+    run_http_case,
+)
 
 LABEL = "curl_cffi"
 IMPERSONATE = "chrome131"
@@ -124,6 +142,73 @@ def solve_pixel(s: Any, html: str) -> bool:
     return bool(r.status_code == 200 and r.json().get("ok"))
 
 
+# The observed basic interstitial shape. A fixed regex is all this client has, which is the point
+# of the hardened variant: it randomizes the shape so these stop matching.
+_I_RE = re.compile(r"var\s+i\s*=\s*(\d+)\s*;")
+_J_RE = re.compile(r'var\s+j\s*=\s*i\s*\+\s*Number\("(\d+)"\s*\+\s*"(\d+)"\)')
+_TOKEN_RE = re.compile(r'"bm-verify"\s*:\s*"([^"]+)"')
+
+
+def same_origin_path(location: str) -> str | None:
+    """The path (and query) of ``location`` when it stays on the lab's origin, else None."""
+    if "\\" in location or any(ord(c) < 32 for c in location):  # browsers read \ as /
+        return None
+    target = urljoin(LAB_URL + "/", location)
+    a, b = urlsplit(target), urlsplit(LAB_URL)
+    if (a.scheme, a.netloc) != (b.scheme, b.netloc):
+        return None
+    return a.path + (f"?{a.query}" if a.query else "")
+
+
+def solve_interstitial(s: Any) -> tuple[Any | None, str]:
+    """Regex-only solver for the basic cookieless interstitial.
+
+    Returns ``(response_to_the_followed_location | None, note)``. Never raises: a page the
+    regexes do not match, a rejected verify or a cross-origin ``location`` end in a clear note."""
+    page = s.get(LAB_URL + INTERSTITIAL_PATH, headers=NAV_HEADERS)
+    html = page.text
+    i, j, token = _I_RE.search(html), _J_RE.search(html), _TOKEN_RE.search(html)
+    if not (i and j and token):
+        return None, "regex did not match the interstitial script (hardened shape?), not solved"
+    answer = int(i.group(1)) + int(j.group(1) + j.group(2))
+    r = s.post(
+        f"{LAB_URL}/_sec/verify?provider=interstitial",
+        json={"bm-verify": token.group(1), "pow": answer},
+        headers=_api_headers(),
+    )
+    try:
+        body = r.json()
+    except ValueError:
+        body = {}
+    if r.status_code != 200 or not body.get("ok"):
+        return None, f"regex solved, verify rejected ({body.get('error', r.status_code)})"
+    location = body.get("location")
+    if location:
+        path = same_origin_path(str(location))
+        if path is None:
+            return None, "regex solved, verify accepted, cross-origin location rejected"
+        nav = {**NAV_HEADERS, "Sec-Fetch-Site": "same-origin", "Referer": LAB_URL + "/"}
+        return s.get(
+            LAB_URL + path, headers=nav
+        ), "regex solved, verify accepted, followed location"
+    s.get(LAB_URL + INTERSTITIAL_PATH, headers=NAV_HEADERS)  # no location: reload like the page
+    return None, "regex solved, verify accepted, reloaded"
+
+
+def interstitial_case(case: str) -> CaseResult:
+    """Fresh session (the hard PoW would win by precedence), solve with regexes, then judge the
+    proof_of_work signal of the protected resource."""
+    with cffi.Session(impersonate=IMPERSONATE, verify=False) as s:
+        s.get(LAB_URL + "/", headers=NAV_HEADERS)  # cookies (bm_sz); nothing else is solved
+        followed, note = solve_interstitial(s)
+        if followed is None or urlsplit(str(followed.url)).path != INTERSTITIAL_RETURN_TO:
+            nav = {**NAV_HEADERS, "Sec-Fetch-Site": "same-origin", "Referer": LAB_URL + "/"}
+            followed = s.get(LAB_URL + INTERSTITIAL_RETURN_TO, headers=nav)
+        return judge(
+            LABEL, case, followed.status_code, followed.headers.get(REPORT_ID_HEADER), note
+        )
+
+
 def native_header(path: str, rng: random.Random) -> str:
     """The lab's ``X-acf-sensor-data`` value, re-implemented from the native_app docstring.
 
@@ -167,6 +252,10 @@ def run(cases: list[str] | None = None) -> list[CaseResult]:
                 if case == "native_app"
                 else None
             )
+            if CASE_TABLE[case].endpoint == "interstitial":
+                with row_env(case):
+                    out.append(interstitial_case(case))
+                continue
             with row_env(case):
                 out.append(
                     run_http_case(

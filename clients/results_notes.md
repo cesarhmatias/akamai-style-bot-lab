@@ -8,7 +8,11 @@ All three are representative default configurations, not tuned to pass.
   about 23 Chrome majors old). It solves the pure-HTTP challenges with the current protocols
   (hard sha256 proof of work with the minimum wait, then `sec_cpt`; pixel beacon parsed from the page
   HTML) but runs no JavaScript, so it sends no sensor, no inline telemetry and cannot play the tile
-  game. `native_app` is the one cell where it plays a different role: an app HTTP stack. It
+  game. For the interstitial rows it solves the BASIC cookieless interstitial with regexes only
+  (`var i = N;`, `var j = i + Number("A" + "B");` and the `"bm-verify"` token), POSTs
+  `{"bm-verify", "pow"}` to `/_sec/verify?provider=interstitial`, follows only a same-origin `location`
+  and otherwise reloads; on a page the regexes do not match it stops with a clear reason.
+  `native_app` is the one cell where it plays a different role: an app HTTP stack. It
   re-implements the lab's documented `X-acf-sensor-data` header with the documented sample app key
   and a synthetic motion stream.
 * **playwright**: headless Chromium (Playwright's bundled headless shell) with the two most copied
@@ -16,7 +20,7 @@ All three are representative default configurations, not tuned to pass.
   `Object.defineProperty(Navigator.prototype, 'webdriver', ...)`, plus a seeded Bezier mouse path.
   Protected resources are navigated to, login/checkout/mobile calls use an in-page `fetch` (so the page's
   inline-telemetry wrapper attaches its header) and the tile game is played with a curved, jittered
-  pointer path.
+  pointer path. For the interstitial rows it just loads the page and lets the page's own script run.
 
 ## Reading the cells
 
@@ -34,11 +38,23 @@ All three are representative default configurations, not tuned to pass.
   cannot run the step-up script keeps the WARN; Playwright was never pushed into the strict segment in
   this run, so the module stays skip (✅).
 * `interactive_challenge` for Playwright runs in a fresh browser session. The engine downgrades a
-  `challenge` action to monitor when ANY challenge provider reports the session solved (a valid
-  `sec_cpt` from the landing page's proactive solver counts), so a session that already solved the
-  proof of work is never shown the tile game.
+  `challenge` action to monitor only when the module serving the requested provider reports the
+  session solved: a valid `sec_cpt` waives crypto/interstitial challenges, never the tile game, and a
+  solved tile game never waives a crypto challenge. The fresh session is kept so this row does not
+  depend on what the landing page solved first.
 * `native_app` for curl_cffi is a statement about the lab's documented sample key, not about real SDKs:
   anyone holding the key can mint the header. Real SDK keys and attestation are not public.
+* `pow_interstitial` and `pow_interstitial_hardened` judge the `proof_of_work` signal AFTER an
+  interstitial attempt, in a fresh session for every client (a session that solved the hard proof of
+  work is PASS by precedence: hard > interstitial > none, so Playwright's landing-page solver would hide
+  the interstitial). The runner turns `pow_cookieless_gate` on for both rows and
+  `pow_interstitial_hardened` on for the second one, and restores both afterwards. A solved
+  interstitial is WARN 30 by design (a fixed regex can solve it, so it is weak evidence); an unsolved
+  one is FAIL 45. The `client` column records whether the verify call was accepted.
+  curl_cffi fetches `GET /akam/proof_of_work/interstitial?return_to=/protected/proof_of_work`;
+  Playwright is sent the page by the gate on a cookie-less navigation to `/protected/proof_of_work`,
+  because that page reloads itself after a successful verify, which on the on-demand route
+  re-requests the same interstitial again.
 * `ip_reputation` stays ✅ for every client because the lab resets state between clients and each
   client sends well under the rate controls.
 
@@ -58,6 +74,7 @@ All three are representative default configurations, not tuned to pass.
 | avf_stepup | step-up data requested but not sent | run the step-up script |
 | inline_telemetry | no `akamai-bm-telemetry` header | a browser gets it for free; HTTP needs the page's key and MAC |
 | native_app | no `X-acf-sensor-data` header | the app SDK |
+| pow_interstitial, pow_interstitial_hardened | the interstitial is never attempted | solve it: regexes are enough for the basic page; WARN 30 is the ceiling, only the hard sha256 proof of work reaches PASS |
 
 ### curl_cffi
 
@@ -68,6 +85,8 @@ All three are representative default configurations, not tuned to pass.
 | interactive_challenge | needs trusted pointer events | a browser |
 | avf_stepup (warn) | step-up data requested but not sent | a browser |
 | inline_telemetry | the page script that attaches the header never runs | parse `window.__akInline` from the HTML and compute the request-bound MAC |
+| pow_interstitial (warn) | the regexes solve the basic page and the verify call is accepted, but a regex-solvable challenge is weak evidence: WARN 30 | add the hard proof of work (that cell is ✅) |
+| pow_interstitial_hardened | the randomized arithmetic shape (names, quotes, `Number`/`parseInt`/unary plus, hex or decimal `i`, `var`/`let`, operand order) no longer matches the fixed regexes, so the client stops without solving | interpret the script (a JS engine or a robust JS parser instead of regexes) |
 
 curl_cffi still passes `tls_fingerprint` and `version_consistency` because the pinned `chrome131` profile
 is internally consistent (UA 131, TLS of that era, matching hints). The audit's warning applies when its
@@ -82,6 +101,7 @@ punishes an old but consistent profile.
 | header_order, version_consistency | the UA says Chrome 131 while `sec-ch-ua`, `navigator.userAgentData` and the TLS hello (ALPS 17613, ML-DSA) say Chrome 153; `HeadlessChrome` is in the brands | do not override the UA to an old major; if one is needed, override it with the browser's own major and matching client hints through CDP `Emulation.setUserAgentOverride` + `userAgentMetadata` |
 | js_integrity | the `webdriver` getter is a script function (not native code), `HeadlessChrome` shows in the UA or hints, `window.chrome` is absent in the headless shell | launch with `--disable-blink-features=AutomationControlled` instead of a JS override, use the full browser, and hide the headless brand with the same CDP override |
 | native_app | a browser has no native SDK to produce the header | n/a for a web client |
+| pow_interstitial, pow_interstitial_hardened (warn) | the page's script solves both variants and the verify call is accepted (the hardened shape only breaks regexes, not an engine), but a solved interstitial tops out at WARN 30 | add the hard proof of work: the landing page's proactive solver earns it in the pow row, but these rows start from a fresh session on purpose |
 
 These fixes were checked in a scratch run (not applied to the default client): `channel="chromium"`, the
 `--disable-blink-features=AutomationControlled` flag, no `defineProperty` override, and a CDP user-agent
@@ -114,6 +134,8 @@ New rows (not in the old matrix):
 | inline_telemetry | ❌ | ❌ | ✅ | transactional calls need a request-bound header |
 | account_protector | ✅ | ✅ | ✅ | a first clean login has no history to contradict |
 | native_app | ❌ | ✅ | ❌ | curl_cffi stands in for an app stack with the documented key |
+| pow_interstitial | ❌ | ⚠️ | ⚠️ | a regex solves the basic cookieless interstitial: accepted, but only WARN 30 |
+| pow_interstitial_hardened | ❌ | ❌ | ⚠️ | the randomized shape defeats the fixed regexes; a client that runs the script still solves it |
 
 Other differences:
 

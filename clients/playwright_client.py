@@ -21,11 +21,13 @@ import random
 import time
 from typing import Any
 
-from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, Response, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from .common import (
     CASE_TABLE,
     CASES,
+    INTERSTITIAL_RETURN_TO,
     LAB_URL,
     MOBILE_PATH,
     REPORT_ID_HEADER,
@@ -176,6 +178,33 @@ def play_tile_game(browser: Browser, rng: random.Random) -> tuple[int, str | Non
         ctx.close()
 
 
+def play_interstitial(browser: Browser, case: str) -> CaseResult:
+    """A fresh visitor (no cookies) is sent the cookieless interstitial by the gate; the page's
+    own script solves it and reloads. The cell is the proof_of_work signal of the request the
+    reload makes, i.e. after the interstitial attempt."""
+    ctx = new_context(browser)
+    try:
+        page = ctx.new_page()
+        verifies: list[Response] = []
+        page.on("response", lambda r: verifies.append(r) if "/_sec/verify" in r.url else None)
+        try:
+            with page.expect_response(
+                lambda r: r.url.endswith(INTERSTITIAL_RETURN_TO) and REPORT_ID_HEADER in r.headers,
+                timeout=30_000,
+            ) as info:
+                page.goto(LAB_URL + INTERSTITIAL_RETURN_TO, wait_until="load")
+        except PlaywrightTimeoutError:
+            return judge(LABEL, case, 0, None, "no scored request after the interstitial")
+        resp = info.value
+        accepted = [v.status == 200 for v in verifies]  # the lab answers 403 on a bad solve
+        note = "script ran in the browser, verify " + (
+            "accepted" if accepted and all(accepted) else "rejected or never sent"
+        )
+        return judge(LABEL, case, resp.status, resp.headers.get(REPORT_ID_HEADER), note)
+    finally:
+        ctx.close()
+
+
 def run(cases: list[str] | None = None) -> list[CaseResult]:
     rng = random.Random(SEED)
     wanted = cases or CASES
@@ -189,6 +218,9 @@ def run(cases: list[str] | None = None) -> list[CaseResult]:
         for case in wanted:
             kind = CASE_TABLE[case].endpoint
             with row_env(case):
+                if kind == "interstitial":
+                    out[case] = play_interstitial(browser, case)
+                    continue
                 if case == "interactive_challenge":
                     status, rid = play_tile_game(browser, rng)
                     note = "tile game played with a curved pointer path, in a fresh session"

@@ -17,5 +17,7 @@
   "avf_stepup": {"naive": "warn", "curl_cffi": "warn", "playwright": "pass"},
   "inline_telemetry": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
   "account_protector": {"naive": "pass", "curl_cffi": "pass", "playwright": "pass"},
-  "native_app": {"naive": "fail", "curl_cffi": "pass", "playwright": "fail"}
+  "native_app": {"naive": "fail", "curl_cffi": "pass", "playwright": "fail"},
+  "pow_interstitial": {"naive": "fail", "curl_cffi": "warn", "playwright": "warn"},
+  "pow_interstitial_hardened": {"naive": "fail", "curl_cffi": "fail", "playwright": "warn"}
 }

@@ -65,6 +65,20 @@ _CASES = [
     Case("inline_telemetry", "inline_telemetry", "checkout", "request-bound inline telemetry"),
     Case("account_protector", "account_protector", "login", "login risk against the profile"),
     Case("native_app", "native_app", "mobile", "native-app sensor header on /mobile/api"),
+    # The two rows below judge the proof_of_work signal AFTER an interstitial attempt, in a
+    # fresh session (the hard PoW would win by precedence otherwise).
+    Case(
+        "pow_interstitial",
+        "proof_of_work",
+        "interstitial",
+        "basic cookieless interstitial (a regex can solve it)",
+    ),
+    Case(
+        "pow_interstitial_hardened",
+        "proof_of_work",
+        "interstitial",
+        "same interstitial with the hardened, randomized arithmetic shape",
+    ),
 ]
 CASE_TABLE: dict[str, Case] = {c.name: c for c in _CASES}
 CASES: list[str] = [c.name for c in _CASES]
@@ -197,7 +211,13 @@ def restore_lab(snapshot: dict[str, Any]) -> None:
 
 
 # Per-row lab configuration, applied only while that row runs and restored afterwards.
-ROW_FLAGS: dict[str, dict[str, bool]] = {}
+ROW_FLAGS: dict[str, dict[str, bool]] = {
+    # the cookieless gate is what serves a cookie-less browser the interstitial page
+    "pow_interstitial": {"pow_cookieless_gate": True},
+    "pow_interstitial_hardened": {"pow_cookieless_gate": True, "pow_interstitial_hardened": True},
+}
+INTERSTITIAL_RETURN_TO = "/protected/proof_of_work"
+INTERSTITIAL_PATH = f"/akam/proof_of_work/interstitial?return_to={INTERSTITIAL_RETURN_TO}"
 ROW_PROVIDER: dict[str, str] = {"interactive_challenge": "interactive"}
 
 
