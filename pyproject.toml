@@ -45,7 +45,7 @@ source = ["api/app"]
 omit = ["api/app/main.py"]
 
 [tool.coverage.report]
-fail_under = 75
+fail_under = 90
 show_missing = true
 
 [build-system]
