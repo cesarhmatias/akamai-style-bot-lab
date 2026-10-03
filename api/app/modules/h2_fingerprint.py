@@ -1,20 +1,35 @@
-"""HTTP/2 connection fingerprint (Akamai format) check.
+"""HTTP/2 connection fingerprint check (format from Akamai's 2017 paper).
 
-What real Akamai does: it pioneered H2 fingerprinting. The client's SETTINGS frame
-(ids and values), the connection-level WINDOW_UPDATE, PRIORITY frames and the order
-of pseudo-headers are fixed per HTTP/2 stack, so they identify the browser (or the
-library) independently of anything the client writes in headers.
+Mechanism: the client's SETTINGS frame (ids and values, in order), the connection-level
+WINDOW_UPDATE, PRIORITY frames and the pseudo-header order are fixed per HTTP/2 stack, so they
+identify the browser (or library) independently of anything written in headers.
 
-Format (from the edge, ``x-h2-fingerprint``): ``SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_ORDER``
-e.g. Chrome ``1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p``.
-Empty means the client spoke HTTP/1.1.
+How real Akamai uses it: Akamai published this technique (Shuster, "Passive Fingerprinting of
+HTTP/2 Clients", 2017; audit report section 1.2 case 2) [HIGH for the format, which the paper
+defines; the paper is old, but nothing indicates the idea was dropped]. The literal string is
+``S[;]|WU|P[,]|PS[,]``: SETTINGS ``id:value`` pairs in order of appearance joined by ``;``, the
+WINDOW_UPDATE increment (``00`` when the frame is absent), one ``stream:exclusive:dep:weight``
+tuple per PRIORITY frame (``0`` if none; weights print as wire byte + 1) and the pseudo-header
+letters m/a/s/p. Example (Firefox 53, from the paper):
+``1:65536;4:131072;5:16384|12517377|3:0:0:201,5:0:0:101,7:0:0:1,9:0:7:1,11:0:3:1|m,p,a,s``.
 
-How this lab detects it: the fingerprint is parsed and compared per component against
-the profile of the browser the User-Agent claims (Chrome, Firefox or Safari profiles
-below; Safari = macOS and iOS variants, and every iOS browser counts as Safari),
-with a breakdown in ``details``. HTTP/1.1 with a Chrome/Firefox UA fails, because real
-browsers negotiate h2 over TLS. How a client passes: use an HTTP/2 stack that mimics
-the browser (``curl_cffi`` impersonate, or a real browser).
+How this lab simulates it: the edge emits that string in ``x-h2-fingerprint`` (absent
+WINDOW_UPDATE as ``00`` per the paper; modern tools print ``0``, and this module accepts
+``00``, ``0`` and ``-``). The canonical Akamai string is reported in ``details["akamai_string"]``.
+The edge's ``x-h2-fingerprint-labeled`` (``S[..]|WU[..]|P[..]|PS[..]``) is only a lab convenience
+notation: the brackets describe separators in the paper, they are NOT Akamai's format, and this
+module does not read it. The string is parsed and compared per component against the profile of
+the browser the User-Agent claims (Chrome, Firefox, Safari: macOS and iOS variants; every iOS
+browser counts as Safari), with a breakdown in ``details``. HTTP/1.1 with a Chrome/Firefox/Safari
+UA fails, because real browsers negotiate h2 over TLS. The first HEADERS frame priority
+(``x-h2-headers-priority``) is only echoed in ``details``: it is outside the Akamai string and not
+scored.
+
+How a client passes: use an HTTP/2 stack that mimics the browser (``curl_cffi`` impersonate, or a
+real browser).
+
+Limits: profile values are 2025 captures (Chrome 136-154, Firefox 138, Safari 18.x; MEDIUM for
+Safari, Safari 26 unverified); Firefox's old PRIORITY tree is no longer sent.
 """
 
 from __future__ import annotations
@@ -67,6 +82,13 @@ def parse_h2(fp: str) -> dict | None:
         return None
     pseudo = parts[3].replace(" ", "")
     return {"settings": settings, "window_update": wu, "priority": parts[2], "pseudo": pseudo}
+
+
+def akamai_string(parsed: dict) -> str:
+    """Canonical Akamai string; an absent WINDOW_UPDATE is written ``00`` as in the paper."""
+    settings = ";".join(f"{k}:{v}" for k, v in parsed["settings"])
+    wu = str(parsed["window_update"]) if parsed["window_update"] else "00"
+    return f"{settings}|{wu}|{parsed['priority']}|{parsed['pseudo']}"
 
 
 def compare(parsed: dict, prof: H2Profile) -> dict[str, int]:
@@ -130,7 +152,13 @@ class H2FingerprintModule(DetectionModule):
         best = min(scored, key=lambda n: sum(scored[n].values()))
         breakdown = scored[best]
         score = min(100, sum(breakdown.values()))
-        d = {"profile": target, "variant": best, "breakdown": breakdown, "fp": fp}
+        d = {
+            "profile": target, "variant": best, "breakdown": breakdown, "fp": fp,
+            "akamai_string": akamai_string(parsed),
+            "window_update_absent": parsed["window_update"] == 0,
+        }
+        if hp := ctx.header("x-h2-headers-priority"):
+            d["headers_priority"] = hp
         if score == 0:
             if claimed == "other":
                 return self.signal(Verdict.PASS, 0, "H2 matches Chrome profile", **d)

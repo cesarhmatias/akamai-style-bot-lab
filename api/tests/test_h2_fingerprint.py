@@ -13,12 +13,12 @@ FF_FP = "1:65536;2:0;4:131072;5:16384|12517377|3:0:0:201,5:0:0:101|m,p,a,s"
 HTTPX_H2_FP = "3:100;4:65535|65535|0|m,s,a,p"
 
 
-def run(fp, ua=CHROME_UA, proto="h2"):
+def run(fp, ua=CHROME_UA, proto="h2", headers=None):
     c = RequestContext(
         method="GET",
         path="/",
         client_ip="1.1.1.1",
-        headers=[],
+        headers=headers or [],
         header_order=[],
         cookies={},
         user_agent=ua,
@@ -123,3 +123,33 @@ def test_absent_window_update_accepts_00_and_0():
     assert parse_h2("1:65536|00|0|m,a,s,p")["window_update"] == 0
     assert parse_h2("1:65536|0|0|m,a,s,p")["window_update"] == 0
     assert parse_h2("1:65536|-|0|m,a,s,p")["window_update"] == 0
+
+
+def test_absent_window_update_is_deviation_and_canonical_form_is_00():
+    for wu in ("00", "0"):
+        s = run(f"1:65536;2:0;4:6291456;6:262144|{wu}|0|m,a,s,p")
+        assert s.details["breakdown"]["window_update"] == 20
+        assert s.details["window_update_absent"] is True
+        assert s.details["akamai_string"] == "1:65536;2:0;4:6291456;6:262144|00|0|m,a,s,p"
+
+
+def test_akamai_string_in_details_roundtrips_for_present_window_update():
+    s = run(CHROME_FP)
+    assert s.details["akamai_string"] == CHROME_FP and s.details["window_update_absent"] is False
+
+
+def test_paper_firefox53_example_parses():
+    fp = "1:65536;4:131072;5:16384|12517377|3:0:0:201,5:0:0:101,7:0:0:1,9:0:7:1,11:0:3:1|m,p,a,s"
+    p = parse_h2(fp)
+    assert p["window_update"] == 12517377 and p["pseudo"] == "m,p,a,s"
+    assert p["priority"].startswith("3:0:0:201")
+
+
+def test_labeled_lab_notation_is_not_accepted_as_akamai_format():
+    labeled = "S[1:65536;2:0;4:6291456;6:262144]|WU[15663105]|P[0]|PS[m,a,s,p]"
+    assert run(labeled).verdict == Verdict.FAIL  # lab convenience only, never scored
+
+
+def test_headers_priority_is_echoed_not_scored():
+    s = run(CHROME_FP, headers=[("x-h2-headers-priority", "1:0:256")])
+    assert s.verdict == Verdict.PASS and s.details["headers_priority"] == "1:0:256"
