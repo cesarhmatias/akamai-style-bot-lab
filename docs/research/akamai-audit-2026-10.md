@@ -224,6 +224,11 @@ Current values:
 
 #### Case 6: `proof_of_work`
 
+> **Lab note (2026-10-03).** The lab has since split this case in two: `sec_cpt_challenge` (the `crypto`, `behavioral` and
+> `adaptive` providers; only `crypto`, and the hashing half of `adaptive`, is a proof of work) and `bm_verify_interstitial`
+> (the cookieless interstitial described below, a cookie and JavaScript check whose only "work" is one addition). The
+> findings in this section are unchanged.
+
 - Akamai's API lists challenge types `GOOGLE_RECAPTCHA`, `AKAMAI_WEB_CRYPTO` and `AKAMAI_MOBILE_CRYPTO`, with
   `challengeIntervalInSeconds` (1–7200), `cryptoChallengeDurationInSeconds` (up to 120), `allowFullCpuUtilization` and
   custom branding URLs ([create challenge action, 2026-06-02][chal] [P]). The brief describes "minimum-time-to-solve

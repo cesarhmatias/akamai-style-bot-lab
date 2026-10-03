@@ -7,9 +7,9 @@ impersonation profile freezes one release, so its UA/hints/TLS drift behind real
 What it does with pure HTTP and no script engine:
 
 * real Chrome TLS/HTTP2/header stack and a cookie jar;
-* ``proof_of_work``: ``GET /akam/proof_of_work/challenge?variant=hard``, solve the sha256
-  puzzle, wait at least ``chlg_duration`` seconds after the challenge was issued, POST the
-  answer to ``/akam/proof_of_work/verify`` and keep the ``sec_cpt`` cookie;
+* ``sec_cpt_challenge``: ``GET /akam/sec_cpt_challenge/challenge?provider=crypto``, solve the
+  sha256 puzzle, wait at least ``chlg_duration`` seconds after the challenge was issued, POST
+  the answer to ``/_sec/verify?provider=crypto`` and keep the ``sec_cpt`` cookie;
 * ``pixel_challenge``: parse the landing page for ``bazadebezolkohpepadr=<int>`` and the
   ``/akam/<n>/<hex8>`` script path, then POST ``p=<ts_ms>.<digest>`` to
   ``/akam/<n>/pixel_<hex8>`` (the digest recipe is the pixel module's documented, lab-defined
@@ -73,8 +73,8 @@ NAV_HEADERS = {
     "Sec-Fetch-Dest": "document",
     "X-Lab-Client": LABEL,
 }
-POW_MAX_ITERATIONS = 5_000_000
-POW_MARGIN_S = 0.3  # slack on top of chlg_duration (clock and network jitter)
+HASH_MAX_ITERATIONS = 5_000_000
+WAIT_MARGIN_S = 0.3  # slack on top of chlg_duration (clock and network jitter)
 # Lab native-app sample key (documented constant in the native_app module, NOT a secret).
 APP_KEY = "lab-native-app-key-v1"
 APP_VERSION = "4.2.0"
@@ -82,12 +82,12 @@ SDK_VERSION = "3.1.0"
 NATIVE_SEED = 7
 
 
-def solve_pow(nonce: str, difficulty: int) -> int:
+def solve_hash(nonce: str, difficulty: int) -> int:
     prefix = "0" * difficulty
-    for counter in range(POW_MAX_ITERATIONS):
+    for counter in range(HASH_MAX_ITERATIONS):
         if hashlib.sha256(f"{nonce}{counter}".encode()).hexdigest().startswith(prefix):
             return counter
-    raise RuntimeError("proof of work not solved")
+    raise RuntimeError("sha256 puzzle not solved")
 
 
 def _api_headers() -> dict[str, str]:
@@ -103,17 +103,18 @@ def _api_headers() -> dict[str, str]:
     }
 
 
-def solve_proof_of_work(s: Any) -> bool:
-    """Hard sha256 PoW over plain HTTP: solve, wait out ``chlg_duration``, verify."""
-    base = LAB_URL + "/akam/proof_of_work"
+def solve_sec_cpt(s: Any) -> bool:
+    """The crypto sec_cpt challenge over plain HTTP: solve, wait out ``chlg_duration``, verify."""
     t_ask = time.monotonic()  # taken BEFORE the request so the server-side age is >= ours
-    ch = s.get(f"{base}/challenge?variant=hard", headers=_api_headers()).json()
-    counter = solve_pow(ch["nonce"], int(ch["difficulty"]))
-    remaining = float(ch["chlg_duration"]) + POW_MARGIN_S - (time.monotonic() - t_ask)
+    ch = s.get(
+        f"{LAB_URL}/akam/sec_cpt_challenge/challenge?provider=crypto", headers=_api_headers()
+    ).json()
+    counter = solve_hash(ch["nonce"], int(ch["difficulty"]))
+    remaining = float(ch["chlg_duration"]) + WAIT_MARGIN_S - (time.monotonic() - t_ask)
     if remaining > 0:
         time.sleep(remaining)
     r = s.post(
-        f"{base}/verify",
+        f"{LAB_URL}/_sec/verify?provider=crypto",
         json={"token": ch["token"], "answer": counter},
         headers=_api_headers(),
     )
@@ -188,7 +189,7 @@ def solve_interstitial(s: Any) -> tuple[Any | None, str]:
     if r.status_code != 200 or not body.get("ok"):
         return None, f"regex solved, verify rejected ({body.get('error', r.status_code)})"
     nav = {**NAV_HEADERS, "Sec-Fetch-Site": "same-origin", "Referer": LAB_URL + "/"}
-    location = body.get("location")  # only with the LOW pow_interstitial_location flag
+    location = body.get("location")  # only with the LOW interstitial_location flag
     if location:
         path = same_origin_path(str(location))
         if path is None:
@@ -201,9 +202,9 @@ def solve_interstitial(s: Any) -> tuple[Any | None, str]:
 
 
 def interstitial_case(case: str) -> CaseResult:
-    """Fresh, cookie-less session (the hard PoW would win by precedence), solve with regexes,
-    then judge the proof_of_work signal of the protected resource. A client that could not
-    solve it is still behind the gate, so that request is never scored."""
+    """Fresh, cookie-less session (a sec_cpt would PASS by precedence), solve with regexes,
+    then judge the bm_verify_interstitial signal of the protected resource. A client that could
+    not solve it is still behind the gate, so that request is never scored."""
     with cffi.Session(impersonate=IMPERSONATE, verify=False) as s:
         followed, note = solve_interstitial(s)
         if followed is None or urlsplit(str(followed.url)).path != INTERSTITIAL_RETURN_TO:
@@ -246,13 +247,14 @@ def run(cases: list[str] | None = None) -> list[CaseResult]:
     rng = random.Random(NATIVE_SEED)
     with cffi.Session(impersonate=IMPERSONATE, verify=False) as s:
         landing = s.get(LAB_URL + "/", headers=NAV_HEADERS)
-        pow_ok = solve_proof_of_work(s)
+        sec_cpt_ok = solve_sec_cpt(s)
         pixel_ok = solve_pixel(s, landing.text)
         nav = {**NAV_HEADERS, "Sec-Fetch-Site": "same-origin", "Referer": LAB_URL + "/"}
         for case in cases or CASES:
             note = ""
-            if case == "proof_of_work":
-                note = f"hard PoW solved over HTTP, verify {'accepted' if pow_ok else 'rejected'}"
+            if case == "sec_cpt_challenge":
+                verdict = "accepted" if sec_cpt_ok else "rejected"
+                note = f"crypto challenge solved over HTTP, verify {verdict}"
             elif case == "pixel_challenge":
                 note = f"pixel beacon {'accepted' if pixel_ok else 'rejected'}"
             mobile = (

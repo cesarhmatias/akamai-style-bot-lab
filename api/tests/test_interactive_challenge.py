@@ -166,7 +166,7 @@ async def test_behavioral_provider_html_only(http: httpx.AsyncClient) -> None:
     page = await http.get("/protected/all", headers={"x-score": "40", "accept": "text/html"})
     assert "sec-bc-tile-parent" in page.text
     j = await http.get("/protected/all", headers={"x-score": "40"})
-    assert j.json()["error"] == "no_challenge_provider"  # JSON form belongs to proof_of_work
+    assert j.json()["error"] == "no_challenge_provider"  # JSON form: sec_cpt_challenge
 
 
 async def test_ajax_injection_snippet_follows_flag(http: httpx.AsyncClient) -> None:

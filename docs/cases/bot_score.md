@@ -115,12 +115,13 @@ when `known_bots` classified the client, otherwise a lab-defined human or unclas
 
 There is nothing to "pass" in aggregate: keep every detection below the `cautious` band (a score of 0 is `human`). To
 notice silent degradation, compare the data against a reference and check for the canary: an HTTP 200 does not mean the real
-resource was served. Challenges are answered per provider (see `proof_of_work` and `interactive_challenge`).
+resource was served. Challenges are answered per provider (see `sec_cpt_challenge`, `bm_verify_interstitial` and
+`interactive_challenge`).
 
 ## Observed results
 
 The harness judges each case from its signal, not from the action, but `RESULTS.md` records the action and segment the lab
-chose for each request, for example: `tls_fingerprint` naive deny/aggressive (75), curl_cffi allow/human (0); `proof_of_work`
+chose for each request, for example: `tls_fingerprint` naive deny/aggressive (75), curl_cffi allow/human (0); `sec_cpt_challenge`
 naive challenge/strict (45); `avf_stepup` naive challenge/strict (30) and curl_cffi monitor/strict (30, downgraded because it
 held a valid `sec_cpt`); `inline_telemetry` Playwright deny/aggressive although its own signal passed, because other modules
 fired on the same transactional request.

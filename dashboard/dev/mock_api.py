@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODS = [dict(slug=s, title=s.replace("_", " ").title(), description=f"Mock description for {s}.", category=c, enabled=True, confidence=random.choice(["high", "medium", "low", "lab"]), applies_to=["page", "protected"], flags=[], challenge_providers=[])
         for s, c in [("tls_fingerprint", "passive"), ("h2_fingerprint", "passive"), ("header_order", "passive"), ("abck_cookie", "cookie"),
-                     ("sensor_data", "js"), ("proof_of_work", "js"), ("behavioral", "behavioral"), ("ip_reputation", "network")]]
+                     ("sensor_data", "js"), ("sec_cpt_challenge", "js"), ("behavioral", "behavioral"), ("ip_reputation", "network")]]
 REPORTS, SUBS = [], []
 
 def fake():

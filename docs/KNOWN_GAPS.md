@@ -52,7 +52,7 @@ Akamai analogue.
 | HTTP/3 fingerprinting by Akamai | **nothing** (see deferred features) | none |
 | Detection names "Cookie Integrity Failed", "Session Validation", "Browser Validation" | not used as names; `session_validation` is a lab approximation | none |
 | SBSD is part of Content Protector | speculation; not modelled | none |
-| JSON `location` in the interstitial verify response (audit §3.1, Low) | the verify reply carries the challenged path, same-origin only; clients must not depend on it (see section 4) | `pow_interstitial_location` (off) |
+| JSON `location` in the interstitial verify response (audit §3.1, Low) | the verify reply carries the challenged path, same-origin only; clients must not depend on it (see section 4) | `interstitial_location` (off) |
 
 ## 3. Deferred features (deliberately not built)
 
@@ -66,7 +66,7 @@ Akamai analogue.
 | **Reverse-DNS verification and remote key directories** for known bots | The lab is offline; `known_bots` checks configured source ranges and a LAB Ed25519 key directory, and never fetches a remote `Signature-Agent` directory. |
 | **Population profiles, source reputation feeds, real geo or ASN data** | Akamai derives these from its whole network. `account_protector` and `ip_reputation` use only local counters, with the IP prefix standing in for network and location. |
 | **Other rate-control identifiers and client lists** (`api-key`, `cookie:<name>`, `request-header:<name>`, `query-string:<name>`; GEO, ASN, FILE_HASH, USER_ID, DOMAIN lists; `region_aggregated` counters) | Only `ip`, `ip-useragent` and `tls-fingerprint` identifiers and an IP list (`LAB_BAD_CIDRS`) exist. The rest add no new teaching value for a single-process lab. |
-| **Challenge-action options** (`GOOGLE_RECAPTCHA`, `allowFullCpuUtilization`, custom branding, a real `AKAMAI_MOBILE_CRYPTO` SDK flow) | Only crypto, behavioral, adaptive and interactive providers exist; the mobile class reuses the JSON provider. The real SDK documentation is login-gated. |
+| **Challenge-action options** (`GOOGLE_RECAPTCHA`, `allowFullCpuUtilization`, custom branding, a real `AKAMAI_MOBILE_CRYPTO` SDK flow) | Only crypto, behavioral, adaptive, interactive and interstitial providers exist; the mobile class reuses the JSON provider. The real SDK documentation is login-gated. |
 | **Five interactive mini-game types** | One tile-grid game is built (audit §2.4). |
 | **High-entropy client-hint negotiation** (`Accept-CH`, `Critical-CH`) | The lab does not request hints; `header_order` and `version_consistency` use what the browser sends by default. |
 | **HEADERS-frame priority scoring** | The edge records `x-h2-headers-priority` and `h2_fingerprint` echoes it in `details`, but it is outside Akamai's string and not scored. |
@@ -77,7 +77,7 @@ Akamai analogue.
 - **`location` in the verify response is unconfirmed.** Published sources show the interstitial clearing the session by
   reloading the page, or by a `<meta http-equiv="refresh">` that carries a single-use `bm-verify` token. None shows a JSON
   `location` field in the `/_sec/verify?provider=interstitial` response. The lab returns one only with the Low flag
-  `pow_interstitial_location` (off); clients should not depend on it, and any client that follows it must reject
+  `interstitial_location` (off); clients should not depend on it, and any client that follows it must reject
   cross-origin targets.
 - **Cookie timing is approximated.** In the bershka capture the interstitial page sets only the site's own session cookies
   and the verify response sets `_abck`, `bm_sz` and `ak_bmsc`. The lab issues all three with the page, because it binds the

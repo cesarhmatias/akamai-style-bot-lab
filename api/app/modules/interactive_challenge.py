@@ -23,7 +23,7 @@ How the lab simulates it
     * ``challenge_providers = {"interactive", "behavioral"}``. ``interactive`` serves this page
       for navigations and a 428 JSON (with ``challenge_url``) for XHR; ``behavioral`` serves the
       page for navigations only (the JSON form belongs to the sensor-based provider of
-      ``proof_of_work``). Select it with ``challenge_provider`` in ``PUT /api/policy``.
+      ``sec_cpt_challenge``). Select it with ``challenge_provider`` in ``PUT /api/policy``.
     * ``POST /akam/interactive_challenge/verify`` with ``{token, clicks[], moves[], keys[],
       total}``. Checks: single-use token bound to ``bm_sz``; clicks match the sequence; every
       click ``isTrusted``; the first click comes after a human reaction time and clicks are not
@@ -231,7 +231,7 @@ class InteractiveChallenge(DetectionModule):
         self, request: Request, ctx: RequestContext, provider: str, *, html: bool
     ) -> Response | None:
         if provider not in self.challenge_providers or (provider == "behavioral" and not html):
-            return None  # JSON "behavioral" belongs to proof_of_work's sensor-based provider
+            return None  # JSON "behavioral" belongs to sec_cpt_challenge's sensor provider
         token, rec = await self.make_challenge(ctx.store, ctx.session_id)
         headers = {"Cache-Control": "no-store"}
         if html:

@@ -34,7 +34,7 @@ and XHR calls.
 
 - `challenge_providers = {"interactive", "behavioral"}`. `interactive` serves the page for navigations and a 428 JSON (with
   `challenge_url`) for XHR; `behavioral` serves the page for navigations only (the JSON form of `behavioral` belongs to the
-  sensor-based provider of `proof_of_work`). Select it with `challenge_provider` in `PUT /api/policy`.
+  sensor-based provider of `sec_cpt_challenge`). Select it with `challenge_provider` in `PUT /api/policy`.
 - The page: a 3x3 grid (`GRID = 9`) of numbers 1-9 or letters, a sequence of 3 tiles (`NEED = 3`), the four marker classes,
   no `<title>`, a lab-styled `scf-akamai-logo` element (no real logo).
 - `POST /akam/interactive_challenge/verify {token, clicks[], moves[], keys[], total}`: the token (`ichal:{token}`, 180 s) is

@@ -10,7 +10,8 @@
 
 A self-hosted, local-only playground that **simulates** the observable behaviour of Akamai Bot Manager: passive
 fingerprints (TLS/JA4, HTTP/2, header order, cross-layer version checks), cookies and sensor telemetry, challenges
-(proof of work, pixel, SBSD-style, interactive tiles), behavioral signals, rate controls, and a **Bot Score with response
+(`sec_cpt` crypto proof of work, the cookieless `bm-verify` interstitial, pixel, SBSD-style, interactive tiles), behavioral
+signals, rate controls, and a **Bot Score with response
 actions** (monitor, delay, slow, tarpit, serve alternate content, challenge, deny). You point your own scrapers and
 automation at your own server and see exactly why each one is scored the way it is.
 
@@ -31,7 +32,7 @@ flowchart LR
     subgraph lab[docker compose]
       E[edge - Go<br/>TLS + HTTP/2 fingerprinting<br/>JA3, JA4, H2, header order] -->|HTTP + x-ja4, x-h2-fingerprint, ...| G
       subgraph A[api - FastAPI]
-        G[pre_request gates<br/>e.g. waiting room] --> M[detection modules x22<br/>signals 0-100]
+        G[pre_request gates<br/>e.g. waiting room] --> M[detection modules x23<br/>signals 0-100]
         M --> S[Bot Score<br/>max + 0.25 x rest]
         S --> SEG[segment per telemetry type<br/>cautious / strict / aggressive]
         SEG --> P[response policy<br/>endpoint class x segment]
@@ -75,7 +76,8 @@ tier, the exact checks, how a scraper passes it and the observed results. Tiers 
 | [js_integrity](docs/cases/js_integrity.md) | js | HIGH | on | native getters, `webdriver`, headless markers, automation globals |
 | [session_validation](docs/cases/session_validation.md) | behavioral | MEDIUM | on | page navigations vs XHR chain per session |
 | [behavioral](docs/cases/behavioral.md) | behavioral | HIGH | on | mouse, keyboard, touch and motion telemetry |
-| [proof_of_work](docs/cases/proof_of_work.md) | js | MEDIUM | on | `sec_cpt` providers, minimum solve time, 428 vs iframe, cookieless `bm-verify` interstitial |
+| [sec_cpt_challenge](docs/cases/sec_cpt_challenge.md) | js | MEDIUM | on | `sec_cpt` providers: crypto (sha256 proof of work), behavioral, adaptive; minimum solve time, 428 vs iframe |
+| [bm_verify_interstitial](docs/cases/bm_verify_interstitial.md) | js | MEDIUM | on (gate flag off) | cookieless `bm-verify` interstitial: a cookie and JavaScript check (one addition, not a proof of work), meta-refresh time penalty |
 | [pixel_challenge](docs/cases/pixel_challenge.md) | js | MEDIUM | on | value in the HTML posted to `/akam/<n>/pixel_<hex>` |
 | [sbsd_challenge](docs/cases/sbsd_challenge.md) | js | LOW | on (lab device) | per-issuance JS op chain; vendor flow behind `sbsd_vendor_flow` |
 | [interactive_challenge](docs/cases/interactive_challenge.md) | behavioral | MEDIUM | on | tile mini-game, AJAX challenge injection |
@@ -107,7 +109,7 @@ per-signal reasons, how a failing client would pass, and the before/after note f
 | sensor_data | protected | ❌ | ❌ | ✅ |
 | js_integrity | protected | ❌ | ❌ | ❌ |
 | behavioral | protected | ❌ | ❌ | ✅ |
-| proof_of_work | protected | ❌ | ✅ | ✅ |
+| sec_cpt_challenge | protected | ❌ | ✅ | ✅ |
 | pixel_challenge | protected | ❌ | ✅ | ✅ |
 | sbsd_challenge | protected | ❌ | ❌ | ✅ |
 | interactive_challenge | protected | ❌ | ❌ | ✅ |
@@ -115,18 +117,17 @@ per-signal reasons, how a failing client would pass, and the before/after note f
 | inline_telemetry | checkout | ❌ | ❌ | ✅ |
 | account_protector | login | ✅ | ✅ | ✅ |
 | native_app | mobile | ❌ | ✅ | ❌ |
-| pow_interstitial | interstitial | ❌ | ⚠️ | ⚠️ |
-| pow_interstitial_hardened | interstitial | ❌ | ❌ | ⚠️ |
+| bm_verify_interstitial | interstitial | ❌ | ⚠️ | ⚠️ |
+| bm_verify_interstitial_hardened | interstitial | ❌ | ❌ | ⚠️ |
 
 - **naive**: plain `requests`, no scripts. **curl_cffi**: Chrome 131 impersonation (pinned, about 23 majors old),
-  solves proof of work and pixel in pure Python, runs no JS. **playwright**: headless Chromium with a UA override
-  to Chrome/131, a masked `navigator.webdriver` and a seeded Bezier mouse path; the new version and integrity checks
-  catch both overrides.
-- **pow_interstitial** rows: the cookieless `bm-verify` arithmetic interstitial (flag `pow_cookieless_gate`, plus the LAB flag
-  `pow_interstitial_hardened` for the second row). A regex-only curl_cffi solves the basic page (⚠️: solving it is weak evidence,
-  WARN 20, served under monitoring) and is stopped by the randomized hardened shape (❌); Playwright runs the page's own script
-  (⚠️). See
-  [proof_of_work](docs/cases/proof_of_work.md#cookieless-bm-verify-interstitial).
+  solves the crypto `sec_cpt` challenge and the pixel in pure Python, runs no JS. **playwright**: headless Chromium with a
+  UA override to Chrome/131, a masked `navigator.webdriver` and a seeded Bezier mouse path; the new version and integrity
+  checks catch both overrides.
+- **bm_verify_interstitial** rows: the cookieless `bm-verify` arithmetic interstitial (flag `interstitial_cookieless_gate`,
+  plus the LAB flag `interstitial_hardened` for the second row). A regex-only curl_cffi solves the basic page (⚠️: solving it
+  is weak evidence, WARN 20, served under monitoring) and is stopped by the randomized hardened shape (❌); Playwright runs the
+  page's own script (⚠️). See [bm_verify_interstitial](docs/cases/bm_verify_interstitial.md).
 - The Playwright and curl_cffi versions are pinned in `pyproject.toml` because the Playwright JA4 depends on the bundled
   Chromium build.
 
@@ -160,9 +161,9 @@ environment variable `LAB_FLAG_<NAME>`, then the default. `GET /api/flags` lists
 | `rate_id_ip_useragent` | off | high | `ip_reputation` | rate-control identifier = IP + User-Agent |
 | `rate_id_tls_fingerprint` | off | high | `ip_reputation` | rate-control identifier = JA4 |
 | `akamai_ghost_server_header` | **on** | medium | engine | send `Server: AkamaiGHost` on deny pages |
-| `pow_cookieless_gate` | off | medium | `proof_of_work` | serve the `bm-verify` interstitial to HTML navigations until the session has server-side proof |
-| `pow_interstitial_location` | off | low | `proof_of_work` | add a same-origin JSON `location` to the interstitial's verify reply (unverified) |
-| `pow_interstitial_hardened` | off | lab | `proof_of_work` | randomize the interstitial's arithmetic shape (lab device) |
+| `interstitial_cookieless_gate` | off | medium | `bm_verify_interstitial` | serve the `bm-verify` interstitial to HTML navigations until the session has server-side proof |
+| `interstitial_location` | off | low | `bm_verify_interstitial` | add a same-origin JSON `location` to the interstitial's verify reply (unverified) |
+| `interstitial_hardened` | off | lab | `bm_verify_interstitial` | randomize the interstitial's arithmetic shape (lab device) |
 | `abck_tilde0_mode` | off | low | `abck_cookie` | `_abck` flips to `~0~`; a forged `~0~` is a BLOCK |
 | `abck_n_posts` | off | low | `abck_cookie` | validity needs N sensor posts (default 3) |
 | `ak_bmsc_httponly` | off | low | `pixel_challenge` | issue `ak_bmsc` HttpOnly |

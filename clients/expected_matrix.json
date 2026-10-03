@@ -10,7 +10,7 @@
   "sensor_data": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
   "js_integrity": {"naive": "fail", "curl_cffi": "fail", "playwright": "fail"},
   "behavioral": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
-  "proof_of_work": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
+  "sec_cpt_challenge": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
   "pixel_challenge": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
   "sbsd_challenge": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
   "interactive_challenge": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
@@ -18,6 +18,6 @@
   "inline_telemetry": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
   "account_protector": {"naive": "pass", "curl_cffi": "pass", "playwright": "pass"},
   "native_app": {"naive": "fail", "curl_cffi": "pass", "playwright": "fail"},
-  "pow_interstitial": {"naive": "fail", "curl_cffi": "warn", "playwright": "warn"},
-  "pow_interstitial_hardened": {"naive": "fail", "curl_cffi": "fail", "playwright": "warn"}
+  "bm_verify_interstitial": {"naive": "fail", "curl_cffi": "warn", "playwright": "warn"},
+  "bm_verify_interstitial_hardened": {"naive": "fail", "curl_cffi": "fail", "playwright": "warn"}
 }

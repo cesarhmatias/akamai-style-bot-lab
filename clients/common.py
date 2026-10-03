@@ -57,7 +57,12 @@ _CASES = [
     Case("sensor_data", "sensor_data", "protected", "sensor payload posted"),
     Case("js_integrity", "js_integrity", "protected", "automation artifacts in the sensor"),
     Case("behavioral", "behavioral", "protected", "interaction telemetry"),
-    Case("proof_of_work", "proof_of_work", "protected", "hard sha256 proof of work (sec_cpt)"),
+    Case(
+        "sec_cpt_challenge",
+        "sec_cpt_challenge",
+        "protected",
+        "sec_cpt crypto challenge: sha256 proof of work plus the minimum wait",
+    ),
     Case("pixel_challenge", "pixel_challenge", "protected", "pixel beacon from the page HTML"),
     Case("sbsd_challenge", "sbsd_challenge", "protected", "SBSD op-chain challenge"),
     Case("interactive_challenge", "interactive_challenge", "protected", "interactive tile game"),
@@ -65,17 +70,17 @@ _CASES = [
     Case("inline_telemetry", "inline_telemetry", "checkout", "request-bound inline telemetry"),
     Case("account_protector", "account_protector", "login", "login risk against the profile"),
     Case("native_app", "native_app", "mobile", "native-app sensor header on /mobile/api"),
-    # The two rows below judge the proof_of_work signal AFTER an interstitial attempt, in a
-    # fresh session (the hard PoW would win by precedence otherwise).
+    # The two rows below judge the bm_verify_interstitial signal AFTER an interstitial attempt,
+    # in a fresh session (a sec_cpt from the landing page would PASS by precedence otherwise).
     Case(
-        "pow_interstitial",
-        "proof_of_work",
+        "bm_verify_interstitial",
+        "bm_verify_interstitial",
         "interstitial",
         "basic cookieless interstitial (a regex can solve it)",
     ),
     Case(
-        "pow_interstitial_hardened",
-        "proof_of_work",
+        "bm_verify_interstitial_hardened",
+        "bm_verify_interstitial",
         "interstitial",
         "same interstitial with the hardened, randomized arithmetic shape",
     ),
@@ -213,11 +218,14 @@ def restore_lab(snapshot: dict[str, Any]) -> None:
 # Per-row lab configuration, applied only while that row runs and restored afterwards.
 ROW_FLAGS: dict[str, dict[str, bool]] = {
     # the cookieless gate is what serves a cookie-less browser the interstitial page
-    "pow_interstitial": {"pow_cookieless_gate": True},
-    "pow_interstitial_hardened": {"pow_cookieless_gate": True, "pow_interstitial_hardened": True},
+    "bm_verify_interstitial": {"interstitial_cookieless_gate": True},
+    "bm_verify_interstitial_hardened": {
+        "interstitial_cookieless_gate": True,
+        "interstitial_hardened": True,
+    },
 }
-INTERSTITIAL_RETURN_TO = "/protected/proof_of_work"
-INTERSTITIAL_PATH = f"/akam/proof_of_work/interstitial?return_to={INTERSTITIAL_RETURN_TO}"
+INTERSTITIAL_RETURN_TO = "/protected/bm_verify_interstitial"
+INTERSTITIAL_PATH = f"/akam/bm_verify_interstitial/page?return_to={INTERSTITIAL_RETURN_TO}"
 ROW_PROVIDER: dict[str, str] = {"interactive_challenge": "interactive"}
 
 

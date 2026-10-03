@@ -6,13 +6,13 @@ All three are representative default configurations, not tuned to pass.
   the telemetry the lab asks for.
 * **curl_cffi**: `impersonate="chrome131"` stays pinned on purpose (the audit notes the profile is
   about 23 Chrome majors old). It solves the pure-HTTP challenges with the current protocols
-  (hard sha256 proof of work with the minimum wait, then `sec_cpt`; pixel beacon parsed from the page
+  (the crypto `sec_cpt` challenge: sha256 with the minimum wait; pixel beacon parsed from the page
   HTML) but runs no JavaScript, so it sends no sensor, no inline telemetry and cannot play the tile
-  game. For the interstitial rows a cookie-less navigation to `/protected/proof_of_work` gets the page
-  from the gate, and it solves the BASIC interstitial with regexes only (`var i = N;`,
+  game. For the interstitial rows a cookie-less navigation to `/protected/bm_verify_interstitial` gets
+  the page from the gate, and it solves the BASIC interstitial with regexes only (`var i = N;`,
   `var j = i + Number("A" + "B");` and the `"bm-verify"` token): it POSTs `{"bm-verify", "pow"}` to
   `/_sec/verify?provider=interstitial` and reloads the resource, as the page does. It follows a
-  same-origin `location` only when the reply carries one (LOW flag `pow_interstitial_location`, off); on
+  same-origin `location` only when the reply carries one (LOW flag `interstitial_location`, off); on
   a page the regexes do not match it stops with a clear reason.
   `native_app` is the one cell where it plays a different role: an app HTTP stack. It
   re-implements the lab's documented `X-acf-sensor-data` header with the documented sample app key
@@ -46,16 +46,19 @@ All three are representative default configurations, not tuned to pass.
   depend on what the landing page solved first.
 * `native_app` for curl_cffi is a statement about the lab's documented sample key, not about real SDKs:
   anyone holding the key can mint the header. Real SDK keys and attestation are not public.
-* `pow_interstitial` and `pow_interstitial_hardened` judge the `proof_of_work` signal AFTER an
-  interstitial attempt, in a fresh session for every client (a session that solved the hard proof of
-  work is PASS by precedence: hard > interstitial > none, so Playwright's landing-page solver would hide
-  the interstitial). The runner turns `pow_cookieless_gate` on for both rows and
-  `pow_interstitial_hardened` on for the second one, and restores both afterwards. Both browser-like
-  clients get the page from the gate on a cookie-less navigation to `/protected/proof_of_work`, solve
-  it and reload that URL; the `client` column records whether the verify call was accepted.
+* `bm_verify_interstitial` and `bm_verify_interstitial_hardened` judge the `bm_verify_interstitial`
+  signal AFTER an interstitial attempt, in a fresh session for every client (the signal follows the
+  best proof the session holds: a valid `sec_cpt` or a validated `_abck` is PASS, so Playwright's
+  landing-page solver would hide the interstitial). The runner turns `interstitial_cookieless_gate` on
+  for both rows and `interstitial_hardened` on for the second one, and restores both afterwards. Both
+  browser-like clients get the page from the gate on a cookie-less navigation to
+  `/protected/bm_verify_interstitial`, solve it and reload that URL; the `client` column records
+  whether the verify call was accepted.
   A solved interstitial is WARN 20 by design: weak evidence (a fixed regex can solve it), but inside
   the cautious band, so the protected page is served under monitoring, as the bershka capture shows
-  for a cleared session. An unsolved one is FAIL 45 (strict: challenge). The gate checks server-side state,
+  for a cleared session. An unsolved one is FAIL 45 while the interstitial is in use (strict:
+  challenge). The interstitial is a cookie and JavaScript check, not a proof of work: the "work" is one
+  addition, which is why a regex can do it. The gate checks server-side state,
   not cookies, so a client that could not solve it stays behind it: curl_cffi's hardened cell is ❌
   because its last request was answered with the interstitial again and never scored. A client
   without JavaScript could follow the page's 5-second meta refresh instead, which lets one navigation
@@ -73,14 +76,14 @@ All three are representative default configurations, not tuned to pass.
 | tls_fingerprint, h2_fingerprint, header_order | OpenSSL hello, HTTP/1.1, `python-requests` headers | an impersonation library or a real browser |
 | session_validation | an API-style call without browser fetch metadata and a page-to-XHR chain | load a page first and send `Sec-Fetch-*` plus a same-origin `Referer` |
 | abck_cookie, sensor_data, js_integrity, behavioral | no JavaScript, so no sensor and no interaction | run the page in a browser |
-| proof_of_work | no solve | `GET /akam/proof_of_work/challenge?variant=hard`, sha256, wait `chlg_duration`, POST verify |
+| sec_cpt_challenge | no solve | `GET /akam/sec_cpt_challenge/challenge?provider=crypto`, sha256, wait `chlg_duration`, `POST /_sec/verify?provider=crypto` |
 | pixel_challenge | no beacon | parse `bazadebezolkohpepadr` and `/akam/13/<hex>` from the HTML, POST `p=<ts>.<digest>` |
 | sbsd_challenge | script never executed | run the script |
 | interactive_challenge | game not played | play it in a browser with real pointer input |
 | avf_stepup | step-up data requested but not sent | run the step-up script |
 | inline_telemetry | no `akamai-bm-telemetry` header | a browser gets it for free; HTTP needs the page's key and MAC |
 | native_app | no `X-acf-sensor-data` header | the app SDK |
-| pow_interstitial, pow_interstitial_hardened | the interstitial is never attempted | solve it: regexes are enough for the basic page; WARN 20 (served under monitoring) is the ceiling, only the hard sha256 proof of work reaches PASS |
+| bm_verify_interstitial, bm_verify_interstitial_hardened | the interstitial is never attempted | solve it: regexes are enough for the basic page; WARN 20 (served under monitoring) is the ceiling, only a valid `sec_cpt` or a validated `_abck` reaches PASS |
 
 ### curl_cffi
 
@@ -91,8 +94,8 @@ All three are representative default configurations, not tuned to pass.
 | interactive_challenge | needs trusted pointer events | a browser |
 | avf_stepup (warn) | step-up data requested but not sent | a browser |
 | inline_telemetry | the page script that attaches the header never runs | parse `window.__akInline` from the HTML and compute the request-bound MAC |
-| pow_interstitial (warn) | the regexes solve the basic page and the verify call is accepted, but a regex-solvable challenge is weak evidence: WARN 20, served under monitoring | add the hard proof of work (that cell is ✅) |
-| pow_interstitial_hardened | the randomized arithmetic shape (names, quotes, `Number`/`parseInt`/unary plus, hex or decimal `i`, `var`/`let`, operand order) no longer matches the fixed regexes, so the client stops without solving and the gate keeps serving it the interstitial | interpret the script (a JS engine or a robust JS parser instead of regexes) |
+| bm_verify_interstitial (warn) | the regexes solve the basic page and the verify call is accepted, but a regex-solvable challenge is weak evidence: WARN 20, served under monitoring | hold a valid `sec_cpt` in the same session (its `sec_cpt_challenge` cell is ✅) |
+| bm_verify_interstitial_hardened | the randomized arithmetic shape (names, quotes, `Number`/`parseInt`/unary plus, hex or decimal `i`, `var`/`let`, operand order) no longer matches the fixed regexes, so the client stops without solving and the gate keeps serving it the interstitial | interpret the script (a JS engine or a robust JS parser instead of regexes) |
 
 curl_cffi still passes `tls_fingerprint` and `version_consistency` because the pinned `chrome131` profile
 is internally consistent (UA 131, TLS of that era, matching hints). The audit's warning applies when its
@@ -107,7 +110,7 @@ punishes an old but consistent profile.
 | header_order, version_consistency | the UA says Chrome 131 while `sec-ch-ua`, `navigator.userAgentData` and the TLS hello (ALPS 17613, ML-DSA, the GREASE signature algorithm of Chrome 152+) say Chrome 153; `HeadlessChrome` is in the brands | do not override the UA to an old major; if one is needed, override it with the browser's own major and matching client hints through CDP `Emulation.setUserAgentOverride` + `userAgentMetadata` |
 | js_integrity | the `webdriver` getter is a script function (not native code), `HeadlessChrome` shows in the UA or hints, `window.chrome` is absent in the headless shell | launch with `--disable-blink-features=AutomationControlled` instead of a JS override, use the full browser, and hide the headless brand with the same CDP override |
 | native_app | a browser has no native SDK to produce the header | n/a for a web client |
-| pow_interstitial, pow_interstitial_hardened (warn) | the page's script solves both variants and the verify call is accepted (the hardened shape only breaks regexes, not an engine), but a solved interstitial tops out at WARN 20 | add the hard proof of work: the landing page's proactive solver earns it in the pow row, but these rows start from a fresh session on purpose |
+| bm_verify_interstitial, bm_verify_interstitial_hardened (warn) | the page's script solves both variants and the verify call is accepted (the hardened shape only breaks regexes, not an engine), but a solved interstitial tops out at WARN 20 | hold a valid `sec_cpt` or a validated `_abck`: the landing page earns both in the main session, but these rows start from a fresh session on purpose |
 
 These fixes were checked in a scratch run (not applied to the default client): `channel="chromium"`, the
 `--disable-blink-features=AutomationControlled` flag, no `defineProperty` override, and a CDP user-agent
@@ -140,17 +143,17 @@ New rows (not in the old matrix):
 | inline_telemetry | ❌ | ❌ | ✅ | transactional calls need a request-bound header |
 | account_protector | ✅ | ✅ | ✅ | a first clean login has no history to contradict |
 | native_app | ❌ | ✅ | ❌ | curl_cffi stands in for an app stack with the documented key |
-| pow_interstitial | ❌ | ⚠️ | ⚠️ | a regex solves the basic cookieless interstitial: accepted, but only WARN 20 |
-| pow_interstitial_hardened | ❌ | ❌ | ⚠️ | the randomized shape defeats the fixed regexes; a client that runs the script still solves it |
+| bm_verify_interstitial | ❌ | ⚠️ | ⚠️ | a regex solves the basic cookieless interstitial: accepted, but only WARN 20 |
+| bm_verify_interstitial_hardened | ❌ | ❌ | ⚠️ | the randomized shape defeats the fixed regexes; a client that runs the script still solves it |
 
 Other differences:
 
 * Cells are judged from the signal in the report, not the HTTP status. With the response policy,
   `monitor`, `delay` and `serve_alternate` answer 200 and a challenge answers 428 or HTML, so the old
   "allowed = 200" reading no longer says anything about the detection.
-* The curl_cffi PoW and pixel cells are ✅ as before but through the new protocols: the hard proof of
-  work needs the minimum wait and the pixel is parsed from the page HTML (there is no `/config` hand-out
-  any more).
+* The curl_cffi crypto-challenge and pixel cells are ✅ as before but through the new protocols: the
+  crypto challenge needs the minimum wait and the pixel is parsed from the page HTML (there is no
+  `/config` hand-out any more).
 * Safari is not a matrix client: the Safari TLS/H2 fix is covered by the regression tests in
   `api/tests`, not by this table.
 * Running the matrix against the remediated stack exposed three bugs that were fixed on the way:
@@ -165,3 +168,8 @@ Other differences:
   band (it was WARN 30, which kept a cleared session in the challenge band, unlike the captures); and the
   verify reply carries no `location` unless the LOW flag is on (the captures reload). The same pass
   added the page's meta-refresh path and the Chrome 152 TLS markers.
+* A second pass on 2026-10-03 split `proof_of_work` into `sec_cpt_challenge` (the `sec_cpt` providers:
+  only `crypto`, and the hashing half of `adaptive`, is a proof of work) and `bm_verify_interstitial`
+  (the cookieless interstitial: a cookie and JavaScript check whose only "work" is one addition). The
+  rows were renamed (`proof_of_work` to `sec_cpt_challenge`, `pow_interstitial*` to
+  `bm_verify_interstitial*`), the flags too (`pow_*` to `interstitial_*`), and no cell moved.

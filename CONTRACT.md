@@ -34,7 +34,8 @@ flags and challenge providers; the README table lists every module with its tier
 | abck_cookie | cookie | medium | on | page, protected |
 | sensor_data | js | medium | on | page, protected |
 | js_integrity | js | high | on | page, protected, transactional |
-| proof_of_work | js | medium | on | page, protected |
+| sec_cpt_challenge | js | medium | on | page, protected |
+| bm_verify_interstitial | js | medium | on (gate flag off) | none (explicit `/protected/<slug>` only; gate and challenge provider) |
 | pixel_challenge | js | medium | on | page, protected |
 | sbsd_challenge | js | low | on (lab device) | page, protected |
 | avf_stepup | js | medium | on | page, protected, transactional |
@@ -83,7 +84,9 @@ The full key table (writer, meaning, TTL) is in `docs/architecture.md`. The cros
   flag `abck_tilde0_mode` flips it to `~0~`). Helpers in `app/session.py`: `mark_abck_validated`, `is_abck_validated`,
   `abck_cookie_value`, `cookie_attrs`, `extra_cookies`, `fingerprint_binding`.
 - `sensor:{sid}` (latest accepted sensor JSON, read by `behavioral`, `js_integrity`, `version_consistency`), `sensor:n:{sid}`,
-  `sensor:integrity:{sid}`; `pixel:{sid}`, `pow:{sid}`, `sbsd:{sid}` solved markers; `inline:last:{sid}`.
+  `sensor:integrity:{sid}`; `pixel:{sid}`, `sec_cpt:{sid}`, `bm_verify:{sid}`, `sbsd:{sid}` solved markers;
+  `inline:last:{sid}`. `sec_cpt_challenge.sec_cpt_state()` is the shared reader of `sec_cpt:{sid}` (used by
+  `bm_verify_interstitial`).
 - Policy: `policy:doc`; flags: `flag:{name}`; toggles: `toggle:{slug}`.
 - Rate and reputation: `rate:{cid}:s:{sec}`, `rate:{cid}:b:{bucket}`, `penalty:{cid}`, `repcat:{CAT}:{ip}`.
 
@@ -99,7 +102,7 @@ coverage `fail_under = 90`). Conventional Commits; commit only your own files (`
 
 ## Client scripts
 A module that needs JS in the browser declares an OPTIONAL class attribute `client_scripts: ClassVar[list[str]] = []`: paths
-relative to `/akam/<slug>/` (for example `["pow.js"]` -> `/akam/proof_of_work/pow.js`). The landing page and the lab's HTML
+relative to `/akam/<slug>/` (for example `["sec-cpt.js"]` -> `/akam/sec_cpt_challenge/sec-cpt.js`). The landing page and the lab's HTML
 interstitials include one `<script src>` per entry for every enabled module. Prefer `page_snippets()` for per-session markup.
 
 ## v2 — audit remediation (2026-10)
@@ -166,6 +169,6 @@ finished, the table no longer constrains anyone, and ownership today is the norm
 |---|---|
 | passive agent | `edge/**`, modules `tls_fingerprint`, `h2_fingerprint`, `header_order`, `ip_reputation`, new passive modules (`version_consistency`, `known_bots`, `botnet_cluster`, `tcp_fingerprint`) |
 | client-side agent | `api/app/session.py`, `api/app/static/**`, modules `abck_cookie`, `sensor_data`, `pixel_challenge`, `behavioral`, new `js_integrity`, `inline_telemetry`, `session_validation`, `native_app` |
-| response agent | `api/app/contract.py`, `engine.py`, `main.py`, `registry.py`, `store.py`, modules `proof_of_work`, `sbsd_challenge`, new `account_protector`, `visitor_prioritization`, `avf_stepup`, `interactive_challenge`; Bot Score segments, actions, deny pages, origin headers |
+| response agent | `api/app/contract.py`, `engine.py`, `main.py`, `registry.py`, `store.py`, modules `proof_of_work` (since split into `sec_cpt_challenge` and `bm_verify_interstitial`), `sbsd_challenge`, new `account_protector`, `visitor_prioritization`, `avf_stepup`, `interactive_challenge`; Bot Score segments, actions, deny pages, origin headers |
 
 Tests: `api/tests/test_<slug>.py` per module; shared fixtures live in `conftest.py`, so add helpers in your own test files.

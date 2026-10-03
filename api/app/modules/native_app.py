@@ -25,7 +25,7 @@ emulator tell). The lab app key is ``LAB_APP_KEY`` (env) or a documented constan
 the harness; it is NOT a secret, it only models the integrity of the SDK-to-server channel.
 
 Client helper: :func:`build_acf_header`. The ``AKAMAI_MOBILE_CRYPTO`` JSON crypto challenge is a
-challenge provider handled by the response agent's ``proof_of_work``, not by this module.
+challenge provider handled by ``sec_cpt_challenge`` (``crypto``), not by this module.
 
 Limits
 ------

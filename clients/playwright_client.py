@@ -44,7 +44,7 @@ USER_AGENT = (
     "Chrome/131.0.0.0 Safari/537.36"
 )
 STEALTH_JS = "Object.defineProperty(Navigator.prototype, 'webdriver', {get: () => false});"
-DONE_FLAGS = ["__akSensorDone", "__akPowDone", "__akPixelDone", "__akSbsdDone"]
+DONE_FLAGS = ["__akSensorDone", "__akSecCptDone", "__akPixelDone", "__akSbsdDone"]
 
 
 def bezier_path(
@@ -81,7 +81,7 @@ def human_mouse(page: Page, rng: random.Random) -> None:
 
 
 def settle_landing(page: Page, timeout_ms: int = 20_000) -> None:
-    """Wait for the landing page's scripts (sensor, PoW, pixel, SBSD) like a patient visitor."""
+    """Wait for the landing page's scripts (sensor, sec_cpt, pixel, SBSD) like a patient visitor."""
     for flag in DONE_FLAGS:  # a flag that never flips just means that script did not finish
         with contextlib.suppress(Exception):
             page.wait_for_function(f"window.{flag} === true", timeout=timeout_ms)
@@ -180,8 +180,8 @@ def play_tile_game(browser: Browser, rng: random.Random) -> tuple[int, str | Non
 
 def play_interstitial(browser: Browser, case: str) -> CaseResult:
     """A fresh visitor (no cookies) is sent the cookieless interstitial by the gate; the page's
-    own script solves it and reloads. The cell is the proof_of_work signal of the request the
-    reload makes, i.e. after the interstitial attempt."""
+    own script solves it and reloads. The cell is the bm_verify_interstitial signal of the
+    request the reload makes, i.e. after the interstitial attempt."""
     ctx = new_context(browser)
     try:
         page = ctx.new_page()

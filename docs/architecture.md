@@ -1,7 +1,7 @@
 # Architecture
 
 ```
-client -> edge (Go, :8443, TLS + h2 fingerprinting) -> api (FastAPI :8000, engine + 22 modules + response policy) <-> redis
+client -> edge (Go, :8443, TLS + h2 fingerprinting) -> api (FastAPI :8000, engine + 23 modules + response policy) <-> redis
 browser dashboard (nginx :3000) -> /api/* -> api
 ```
 
@@ -77,7 +77,8 @@ store but preserves `toggle:*`, `flag:*` and `policy:doc`.
 | `toggle:{slug}` / `flag:{name}` / `policy:doc` | control plane | module on/off, feature flag `1`/`0`, the policy document (persistent) |
 | `abck:{sid}` / `abck:bind:{sid}` | `sensor_data` | `validated`, and the JA4-family/UA/network binding at that moment (4 h) |
 | `sensor:{sid}` / `sensor:n:{sid}` / `sensor:integrity:{sid}` / `sensor_rejected:{sid}` | `sensor_data` | latest accepted sensor JSON, count of valid posts (max 3), integrity block of every decodable post, last rejection reason |
-| `pow:ch:{token}` / `pow:{sid}` / `pow:simple:{sid}` | `proof_of_work` | pending challenge (timeout + 5 s), solved record with the `sec_cpt` cookie (3600 s), solved free-form variant (3600 s) |
+| `sec_cpt:ch:{token}` / `sec_cpt:{sid}` | `sec_cpt_challenge` | pending challenge (timeout + 5 s), solved record with the `sec_cpt` cookie (3600 s) |
+| `bm_verify:ch:{token}` / `bm_verify:{sid}` | `bm_verify_interstitial` | pending interstitial (timeout + 5 s), solved interstitial (3600 s) |
 | `chlg:fail:{sid}` / `safeguard:{sid}` | policy | sliding window of issued challenges; session let through under monitoring |
 | `ichal:{token}` / `ichal:ok:{sid}` | `interactive_challenge` | pending tile challenge (180 s), solved marker (`norechallenge_seconds`, 3000 s) |
 | `avf:need:{sid}` / `avf:data:{sid}` | `avf_stepup` | step-up requested (900 s), step-up data and score (3600 s) |
@@ -96,7 +97,7 @@ store but preserves `toggle:*`, `flag:*` and `policy:doc`.
 | `vp:allowed:{sid}` / `vp:parked:{sid}` | `visitor_prioritization` | admitted (3600 s) / parked in the waiting room |
 | `canary:{token}` | engine | report id that received the serve_alternate canary (24 h) |
 
-Cookies the lab issues: `bm_sz` (4 h), `ak_bmsc` (2 h), `_abck` (1 year), `sec_cpt` (proof of work), `sec_bc` (tile game),
+Cookies the lab issues: `bm_sz` (4 h), `ak_bmsc` (2 h), `_abck` (1 year), `sec_cpt` (solved `sec_cpt` challenge), `sec_bc` (tile game),
 `sbsd_o` and the vendor-flow cookies, `lab_vp_waiting` / `lab_vp_allowed`, and the flag-gated `bm_sv` / `bm_mi`.
 
 ## Module auto-discovery
@@ -132,5 +133,5 @@ under the `api` service `environment:` to use them. An unset or invalid numeric 
 
 **Removed:** `LAB_RATE_FAIL` and `LAB_RATE_BLOCK` (the v1 fixed 10 s windows that counted only scored requests) no longer exist;
 `ip_reputation` uses the burst and average controls above. Other constants (`BLOCK_THRESHOLD` in `contract.py`,
-`DEFAULT_DIFFICULTY` in `proof_of_work.py`, penalty weights in `behavioral.py`) live in the modules; the segment bands, actions and
+`DEFAULT_DIFFICULTY` in `sec_cpt_challenge.py`, penalty weights in `behavioral.py`) live in the modules; the segment bands, actions and
 action parameters live in the policy document (`GET/PUT/DELETE /api/policy`).

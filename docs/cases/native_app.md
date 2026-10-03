@@ -61,4 +61,4 @@ Be the app SDK, or hold the key and build the header per request. Anyone holding
 ## Limits and caveats
 
 - The curl_cffi pass is a statement about the lab's documented sample key, not about real SDKs.
-- The `AKAMAI_MOBILE_CRYPTO` JSON crypto challenge is served by the `proof_of_work` providers, not here.
+- The `AKAMAI_MOBILE_CRYPTO` JSON crypto challenge is served by the `sec_cpt_challenge` providers, not here.
