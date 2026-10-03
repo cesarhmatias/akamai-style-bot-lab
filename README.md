@@ -1,5 +1,4 @@
 [![CI](https://github.com/cesarhmatias/akamai-style-bot-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/cesarhmatias/akamai-style-bot-lab/actions/workflows/ci.yml)
-[![coverage](https://codecov.io/gh/cesarhmatias/akamai-style-bot-lab/branch/main/graph/badge.svg)](https://codecov.io/gh/cesarhmatias/akamai-style-bot-lab)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue?logo=python&logoColor=white)](pyproject.toml)
 [![Go edge](https://img.shields.io/badge/edge-Go%201.23-00ADD8?logo=go&logoColor=white)](edge/)
 [![Ruff](https://img.shields.io/badge/lint-ruff-261230?logo=ruff&logoColor=white)](pyproject.toml)
