@@ -128,13 +128,14 @@ JavaScript, follow the meta refresh after 5 seconds: one page, nothing cleared.
 From `RESULTS.md`. The runner turns `interstitial_cookieless_gate` on for both rows and `interstitial_hardened` on for the
 second, in a fresh session per client, and judges the `bm_verify_interstitial` signal after the attempt.
 
-| Row | naive | curl_cffi (regexes only) | Playwright |
-|---|---|---|---|
-| `bm_verify_interstitial` | fail 45, "no proof of cookie and JavaScript support yet" (not attempted; its `Accept: */*` requests are not gated) | **warn 20**, monitor/cautious, "only the basic arithmetic interstitial was solved (a regex can do that)"; verify accepted, reloaded | **warn 20**, monitor/cautious, same reason; the page's own script ran and verify was accepted |
-| `bm_verify_interstitial_hardened` | fail 45 (not attempted) | **not scored**: the regexes did not match the hardened script, so it stopped, and the gate served the interstitial again | **warn 20**, same reason as the basic row (a browser interprets the script) |
+| Row | naive | curl_cffi (regexes only) | Playwright | Patchright |
+|---|---|---|---|---|
+| `bm_verify_interstitial` | fail 45, "no proof of cookie and JavaScript support yet" (not attempted; its `Accept: */*` requests are not gated) | **warn 20**, monitor/cautious, "only the basic arithmetic interstitial was solved (a regex can do that)"; verify accepted, reloaded | **warn 20**, monitor/cautious, same reason; the page's own script ran and verify was accepted | **warn 20**, same as Playwright |
+| `bm_verify_interstitial_hardened` | fail 45 (not attempted) | **not scored**: the regexes did not match the hardened script, so it stopped, and the gate served the interstitial again | **warn 20**, same reason as the basic row (a browser interprets the script) | **warn 20**, same as Playwright |
 
-Cells in the matrix: `bm_verify_interstitial` naive ❌, curl_cffi ⚠️, Playwright ⚠️; `bm_verify_interstitial_hardened` naive ❌,
-curl_cffi ❌, Playwright ⚠️.
+Cells in the matrix: `bm_verify_interstitial` naive ❌, curl_cffi ⚠️, Playwright ⚠️, Patchright ⚠️;
+`bm_verify_interstitial_hardened` naive ❌, curl_cffi ❌, Playwright ⚠️, Patchright ⚠️. Stealth makes no difference here: any
+browser runs the script, and WARN 20 is the ceiling of a solved interstitial in a fresh session.
 
 ## Limits and caveats
 

@@ -67,6 +67,7 @@ per request. The committed `clients/curl_cffi_client.py` does not.
 | naive | fail | fail 95, "no akamai-bm-telemetry header" |
 | curl_cffi | fail | fail 95, same reason (no JS, so the page script never runs) |
 | Playwright | pass | pass 0, "fresh request-bound telemetry" (login/checkout by in-page `fetch`) |
+| Patchright | pass | pass 0, "fresh request-bound telemetry" (in-page `fetch` in the main world: Patchright evaluates in an isolated world by default, where the page's wrapper does not exist) |
 
 The action column shows `deny/aggressive` even for Playwright: on transactional endpoints every applicable module runs,
 and other signals (for example `js_integrity`) can still deny the request; the cell reflects this module's own signal.

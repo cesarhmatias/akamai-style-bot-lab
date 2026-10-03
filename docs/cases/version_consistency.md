@@ -63,6 +63,7 @@ disagree.
 | naive | pass | skip 0, "Not a Chromium UA: Chrome era markers do not apply" |
 | curl_cffi `chrome131` | pass | pass 0, "Chrome version agrees across layers" |
 | Playwright | fail | fail 80, "User-Agent claims Chrome 131 but ALPS 17613 => Chrome 133+; ... ML-DSA sigalgs ... => Chrome 150+; ... GREASE in signature_algorithms => Chrome 152+; User-Agent says Chrome 131 but sec-ch-ua says 153; User-Agent says Chrome 131 but navigator.userAgentData says 153" |
+| Patchright (Google Chrome 152, no UA override) | pass | pass 0, "Chrome version agrees across layers" |
 
 ## Limits and caveats
 

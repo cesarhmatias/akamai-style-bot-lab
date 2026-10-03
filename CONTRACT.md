@@ -73,7 +73,7 @@ flags and challenge providers; the README table lists every module with its tier
   `GET /api/flags`, `PUT /api/flags/{name}` `{"value": bool}`, `GET /api/feed` (SSE, event `report`, data = ScoreReport JSON),
   `POST /api/reset` (clears the store and the feed; keeps toggles, flags and the policy), `GET /healthz`.
   Control-plane and `/akam/*` requests are NOT scored and NOT in the feed.
-- Clients may send `X-Lab-Client: <name>` (naive|curl_cffi|playwright|browser|anything) -> `ScoreReport.client_label`.
+- Clients may send `X-Lab-Client: <name>` (naive|curl_cffi|playwright|patchright|browser|anything) -> `ScoreReport.client_label`.
 
 ## Session & shared state (store keys)
 The full key table (writer, meaning, TTL) is in `docs/architecture.md`. The cross-module ones:

@@ -66,6 +66,7 @@ Changing headers does nothing; `requests`/`httpx` in HTTP/1.1 mode fail immediat
 | naive (`requests`) | fail | fail 70, "HTTP/1.1 client, not a browser stack" |
 | curl_cffi `chrome131` | pass | pass 0, "H2 matches chrome profile", `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` |
 | Playwright | pass | pass 0, "H2 matches chrome profile", same string |
+| Patchright (Google Chrome 152) | pass | pass 0, "H2 matches chrome profile", same string |
 
 ## Limits and caveats
 

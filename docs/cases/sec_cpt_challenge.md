@@ -110,6 +110,7 @@ do all of this after sleeping, which is the intended lesson: the wait costs time
 | naive | fail | fail 45, "no sec_cpt challenge solved for this session" (challenge/strict) |
 | curl_cffi | pass | pass 0, "sec_cpt challenge solved, cookie valid" (the crypto challenge over HTTP with the minimum wait, then verify) |
 | Playwright | pass | pass 0, same reason (the landing page's proactive solver) |
+| Patchright | pass | pass 0, same reason (the landing page's proactive solver) |
 
 ## Limits and caveats
 

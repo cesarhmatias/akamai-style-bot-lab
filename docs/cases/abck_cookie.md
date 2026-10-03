@@ -65,6 +65,7 @@ Replaying a validated cookie from another client is detected.
 | naive | fail | fail 85, "_abck not validated" |
 | curl_cffi | fail | fail 85, "_abck not validated" (no JavaScript, so no sensor) |
 | Playwright | pass | pass 0, "_abck validated" |
+| Patchright (Google Chrome, headed) | pass | pass 0, "_abck validated" |
 
 ## Limits and caveats
 

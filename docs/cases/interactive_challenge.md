@@ -62,6 +62,7 @@ pointer path (the Playwright harness client does); calling `element.click()` or 
 | naive | fail | fail 45, "interactive challenge not completed" (action challenge/strict) |
 | curl_cffi | fail | fail 45, same (needs trusted pointer events) |
 | Playwright | pass | pass 0, "interactive challenge solved, no re-challenge yet" (a curved, jittered path in a fresh session) |
+| Patchright | pass | pass 0, same (same pointer path, in a fresh session) |
 
 The engine downgrades a `challenge` to monitor only when a module that serves the policy's `challenge_provider` reports the
 session solved it (the engine passes the provider to `challenge_satisfied`). The tile game vouches for `interactive` and

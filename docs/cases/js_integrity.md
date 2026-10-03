@@ -64,11 +64,17 @@ match Akamai's rotated, obfuscated probes.
 | naive | fail | fail 90, "no sensor posted (no integrity probes)" |
 | curl_cffi | fail | fail 90, same reason |
 | Playwright (default recipe) | fail | fail 100, "navigator.webdriver getter is not native (overridden by script); HeadlessChrome in UA or client hints; window.chrome is absent in a Chrome UA" |
+| Patchright (Google Chrome, headed) | pass | pass 0, "integrity probes consistent with a real browser" (`navigator.webdriver` false natively, `window.chrome` present; also with `cdp_probes` on); in new headless it fails 85, "HeadlessChrome in UA or client hints" |
 
 `clients/results_notes.md` records how Playwright would pass (the full browser, `--disable-blink-features=
 AutomationControlled`, no JS override, a CDP user-agent override with matching `userAgentMetadata`).
+The Patchright row is that recipe done by a library: Patchright launches Google Chrome without
+`--enable-automation` and with `--disable-blink-features=AutomationControlled`, so every probe this module has reads
+like a real browser (RESULTS.md, "Patchright bypass attempt").
 
 ## Limits and caveats
 
 - `window.chrome.runtime` is optional (it exists only on some pages); the expected set is `app`, `csi`, `loadTimes`.
-- Akamai-specific CDP probes are unverified ([KNOWN_GAPS](../KNOWN_GAPS.md) low-confidence list).
+- Akamai-specific CDP probes are unverified ([KNOWN_GAPS](../KNOWN_GAPS.md) low-confidence list). The lab's one CDP
+  probe (`cdp_probes`, an `Error.stack` getter trap) did not fire for plain Playwright on Chromium 153 either, so it
+  separates nothing on current builds; no probe here detects Patchright's isolated-world execution.

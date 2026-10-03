@@ -49,6 +49,7 @@ Log in from the account's usual device and network, with a real email domain.
 | naive | pass | pass 0, "login consistent with the profile (gnew_user)" |
 | curl_cffi | pass | pass 0, same |
 | Playwright | pass | pass 0, same |
+| Patchright | pass | pass 0, same |
 
 A single clean login has no history to contradict, so every client passes this cell even though the same login request is
 denied (`deny/aggressive`) because other modules fire on the transactional endpoint. The risk factors are covered by unit

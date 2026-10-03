@@ -56,6 +56,7 @@ also passes: this module catches API-only clients, not header spoofing.
 | naive | fail | fail 80, "JSON/transactional call in a session with no page navigation" |
 | curl_cffi | pass | pass 0, "navigation/XHR chain consistent" |
 | Playwright | pass | pass 0, "navigation/XHR chain consistent" |
+| Patchright | pass | pass 0, "navigation/XHR chain consistent" |
 
 ## Limits and caveats
 

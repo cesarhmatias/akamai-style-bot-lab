@@ -57,6 +57,7 @@ Be the app SDK, or hold the key and build the header per request. Anyone holding
 | naive | fail | fail 90, "no x-acf-sensor-data header" |
 | curl_cffi | pass | pass 0, "fresh native-app sensor" (it re-implements the documented header with the sample key and a synthetic motion stream, playing an app HTTP stack) |
 | Playwright | fail | fail 90, "no x-acf-sensor-data header" (a browser has no native SDK) |
+| Patchright | fail | fail 90, same (a browser has no native SDK) |
 
 ## Limits and caveats
 

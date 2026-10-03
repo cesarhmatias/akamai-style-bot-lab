@@ -1,6 +1,8 @@
 ## How the clients are configured
 
-All three are representative default configurations, not tuned to pass.
+naive, curl_cffi and playwright are representative default configurations, not tuned to pass.
+patchright is the bypass attempt: an off-the-shelf stealth fork used exactly as its README recommends,
+driving the same visitor as the playwright client so every difference comes from the browser layer.
 
 * **naive**: plain `requests`, cookie jar, one landing visit, no script, no challenge solver, none of
   the telemetry the lab asks for.
@@ -23,6 +25,15 @@ All three are representative default configurations, not tuned to pass.
   Protected resources are navigated to, login/checkout/mobile calls use an in-page `fetch` (so the page's
   inline-telemetry wrapper attaches its header) and the tile game is played with a curved, jittered
   pointer path. For the interstitial rows it just loads the page and lets the page's own script run.
+* **patchright** (`patchright==1.63.0`): the playwright client's visitor, unchanged (same landing
+  page, same seeded mouse path, same in-page `fetch`, same tile game), launched with Patchright's
+  documented best-practice setup: `channel="chrome"` (the installed Google Chrome, 152 in this run,
+  not the bundled Chromium), headed (`headless=False`), `no_viewport=True`, and no User-Agent
+  override, init script or client-hint override. Patchright itself removes `--enable-automation`,
+  adds `--disable-blink-features=AutomationControlled`, avoids `Runtime.enable` and evaluates
+  scripts in an isolated world; the in-page `fetch` calls ask for the main world
+  (`isolated_context=False`) so the page's inline-telemetry wrapper applies. Headed needs a display:
+  a Chrome window opens locally and CI runs the matrix under `xvfb-run`.
 
 ## Reading the cells
 
@@ -37,9 +48,9 @@ All three are representative default configurations, not tuned to pass.
   its risk factors (new device, impossible travel, disposable domain) are covered by unit tests.
 * `avf_stepup` depends on session history by design. It is armed by an earlier request that landed in
   the strict segment; the case order in the matrix is fixed so the result is deterministic. A client that
-  cannot run the step-up script keeps the WARN; Playwright was never pushed into the strict segment in
-  this run, so the module stays skip (✅).
-* `interactive_challenge` for Playwright runs in a fresh browser session. The engine downgrades a
+  cannot run the step-up script keeps the WARN; Playwright and Patchright were never pushed into the
+  strict segment before this row, so the module stays skip (✅).
+* `interactive_challenge` for Playwright and Patchright runs in a fresh browser session. The engine downgrades a
   `challenge` action to monitor only when the module serving the requested provider reports the
   session solved: a valid `sec_cpt` waives crypto/interstitial challenges, never the tile game, and a
   solved tile game never waives a crypto challenge. The fresh session is kept so this row does not
@@ -50,8 +61,8 @@ All three are representative default configurations, not tuned to pass.
   signal AFTER an interstitial attempt, in a fresh session for every client (the signal follows the
   best proof the session holds: a valid `sec_cpt` or a validated `_abck` is PASS, so Playwright's
   landing-page solver would hide the interstitial). The runner turns `interstitial_cookieless_gate` on
-  for both rows and `interstitial_hardened` on for the second one, and restores both afterwards. Both
-  browser-like clients get the page from the gate on a cookie-less navigation to
+  for both rows and `interstitial_hardened` on for the second one, and restores both afterwards. The
+  three browser-like clients get the page from the gate on a cookie-less navigation to
   `/protected/bm_verify_interstitial`, solve it and reload that URL; the `client` column records
   whether the verify call was accepted.
   A solved interstitial is WARN 20 by design: weak evidence (a fixed regex can solve it), but inside
@@ -118,6 +129,63 @@ override carrying the browser's real major and matching `userAgentMetadata` turn
 `header_order`, `version_consistency`, `js_integrity`, `abck_cookie` and `behavioral` to pass. Removing only the UA
 override is not enough: the UA then reads `HeadlessChrome/153`, which `header_order` and `js_integrity`
 flag on their own.
+
+### patchright
+
+| cell | why | how a client passes |
+|---|---|---|
+| native_app | a browser has no native SDK to produce the header | n/a for a web client |
+| bm_verify_interstitial, bm_verify_interstitial_hardened (warn) | same as playwright: the page's script solves both variants, but a solved interstitial tops out at WARN 20 in a fresh session | hold a valid `sec_cpt` or a validated `_abck` (the landing page earns both) |
+
+Every other cell passes; see the next section.
+
+## Patchright bypass attempt (2026-10-03)
+
+The question: does an off-the-shelf stealth tool, used as documented and with no lab-specific tuning,
+get past the lab? Answer: yes, for every check a web client can pass. The patchright column is ✅ on
+18 of 21 rows, and the three that are not are the same for any browser: `native_app` (no native SDK)
+and the two interstitial rows (WARN 20 is the ceiling of a solved interstitial in a fresh session).
+Compared with the playwright column, the four cells it fixes are exactly the ones the stealth layer
+targets:
+
+| cell | playwright | patchright | what changed |
+|---|---|---|---|
+| tls_fingerprint | ⚠️ 10 | ✅ | Google Chrome 152's hello (JA4 `t13d1517h2_8daaf6152771_cb7bf5808d99`, 17 extensions with `trust_anchors`) is in the lab's known-Chrome table; the bundled headless shell's is not |
+| header_order | ❌ 100 | ✅ | no UA override and a headed browser: UA, `sec-ch-ua` and the brands all say Google Chrome 152, no `HeadlessChrome` |
+| version_consistency | ❌ 80 | ✅ | UA, client hints, `navigator.userAgentData` and the TLS era markers agree on 152 |
+| js_integrity | ❌ 100 | ✅ | `navigator.webdriver` is false natively (no script getter to catch), `window.chrome` exists, no headless marker |
+
+The behavioural and challenge cells (sensor, `_abck`, behavioral, pixel, SBSD, `sec_cpt`, tile game,
+inline telemetry) were already ✅ for playwright: the visitor runs the real page scripts and draws a
+curved pointer path, so stealth patches add nothing there. The matrix was stable over three runs.
+
+Scratch runs (not part of the gated matrix) to find what still catches it:
+
+* **End to end, not just the case signal.** In the matrix run, checkout and login are
+  `serve_alternate/strict` (the canary response) although their own cells pass: the visitor goes
+  back to the landing page before them without moving the pointer, so the sensor of that page view
+  has no interaction events and `behavioral` fails 70 on the transactional request. With a pointer
+  path on every landing visit, every row except `native_app` and the two interstitial rows was
+  `allow/human`, checkout and login included. Stealth patches hide automation; they do not produce behaviour.
+* **New headless instead of headed** (`PATCHRIGHT_HEADLESS=1`): 15 ✅, 3 ⚠️, 3 ❌. Patchright does not
+  touch the UA, so `HeadlessChrome/152` reaches the server: `header_order` FAIL 60 and `js_integrity`
+  FAIL 85 ("HeadlessChrome in UA or client hints"); `avf_stepup` WARN 35 ("software GL renderer
+  ... SwiftShader"). TLS and HTTP/2 still pass: it is the same Chrome binary.
+* **Every off-by-default detection flag on** (`cdp_probes`, `abck_n_posts`, `abck_tilde0_mode`,
+  `bm_sv_cookies`, `pixel_ties_ak_bmsc`, `sbsd_vendor_flow`, `ak_bmsc_httponly`,
+  `hosting_asn_penalty`, `rate_id_ip_useragent`, `rate_id_tls_fingerprint`): the same cells, except
+  `header_order` WARN 22 ("63% similar"). That WARN is a lab artifact, not a detection: with more
+  sensor posts a `fetch` was the first stream of a new HTTP/2 connection, and the edge reuses the
+  first stream's header order for every later request on the connection, so a navigation was
+  compared with a `fetch` order (see `docs/KNOWN_GAPS.md`).
+* **`cdp_probes` does not separate the two.** The `Error.stack` getter trap (LOW, off) did not fire
+  for plain Playwright 1.63 (Chromium 153) either, so its silence is not evidence that Patchright
+  hides CDP: on these builds the probe does not detect an ordinary CDP-driven browser.
+
+What would catch this client in the lab today is only what no browser can supply (a native-app
+sensor) or a fresh session's interstitial ceiling. Detecting Patchright itself would need a probe the
+lab does not have: a working CDP side-channel, the isolated-world execution context, or behavioural
+modelling beyond "pointer events are present and curved".
 
 ## Before vs after this remediation
 

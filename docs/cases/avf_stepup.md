@@ -47,6 +47,7 @@ output and keeps the WARN.
 | naive | warn | warn 30, "step-up data requested but not received" (challenge/strict) |
 | curl_cffi | warn | warn 30, same (monitor/strict) |
 | Playwright | pass | skip 0, "no step-up requested for this session" (it was never pushed into the strict segment in this run) |
+| Patchright | pass | skip 0, same (never pushed into the strict segment either); in new headless it is warn 35, "step-up data suspicious: software GL renderer (... SwiftShader ...)" |
 
 The case depends on session history by design and the matrix runs cases in a fixed order so the result is deterministic.
 

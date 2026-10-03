@@ -53,6 +53,7 @@ From pure HTTP: (1) GET the page with cookies; (2) parse the integer from `bazad
 | naive | fail | fail 70, "pixel beacon not received for this session" |
 | curl_cffi | pass | pass 0, "pixel beacon received" (pure HTTP, parsed from the page HTML) |
 | Playwright | pass | pass 0, "pixel beacon received" |
+| Patchright | pass | pass 0, "pixel beacon received" |
 
 ## Limits and caveats
 

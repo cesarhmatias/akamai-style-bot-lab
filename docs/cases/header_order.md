@@ -66,10 +66,15 @@ was captured from, and that overriding only the UA string on a different Chromiu
 | naive | fail | fail 85, "missing sec-fetch-* headers; missing accept-language; python-requests telltales: python UA, Accept: */*, accept-encoding without br, Connection header" |
 | curl_cffi `chrome131` | pass | pass 0, "Header set and order match Chrome" |
 | Playwright (UA overridden to Chrome 131) | fail | fail 100, "HeadlessChrome token in sec-ch-ua brands; UA says Chrome 131 but sec-ch-ua says 153" |
+| Patchright (Google Chrome 152, headed, no UA override) | pass | pass 0, "Header set and order match Chrome"; in new headless it fails 60, "HeadlessChrome token in User-Agent" |
 
 ## Limits and caveats
 
 - The Playwright failure is a property of the harness client's default recipe (a UA override on a newer bundled
   Chromium), not of Playwright itself; see `clients/results_notes.md` for how a client would pass.
 - Firefox/Safari order baselines are heuristics. Casing only matters on HTTP/1.1.
+- On HTTP/2 the order is per connection, not per request: the edge reuses the first stream's order for every later
+  stream on the connection. A navigation on a connection a `fetch` opened is compared with a `fetch` order; with every
+  off-by-default flag on, that gave the Patchright client a WARN 22 ("63% similar") on a genuine Chrome navigation
+  (`docs/KNOWN_GAPS.md`, section 5).
 - Akamai says its edge can request client hints (Accept-CH); the lab does not request high-entropy hints.

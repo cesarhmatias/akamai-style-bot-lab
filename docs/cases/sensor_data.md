@@ -61,6 +61,7 @@ per-session key and hash and POST a well-formed `lab3` payload (the harness's pu
 | naive | fail | fail 90, "no sensor_data posted (JS not executed)" |
 | curl_cffi | fail | fail 90, same reason |
 | Playwright | pass | pass 0, "valid sensor_data received" |
+| Patchright | pass | pass 0, "valid sensor_data received" |
 
 ## Limits and caveats
 

@@ -43,7 +43,7 @@ Akamai analogue.
 | Pixel result is tied to `ak_bmsc` | a solved pixel re-issues `ak_bmsc` and scoring requires it | `pixel_ties_ak_bmsc` (off) |
 | `ak_bmsc` is HttpOnly | the cookie is issued HttpOnly | `ak_bmsc_httponly` (off) |
 | `bm_sv` / `bm_mi` purposes and lifetimes | cookies issued and `bm_sv` required on XHR | `bm_sv_cookies` (off) |
-| Akamai-specific CDP / headless probes | an `Error.stack` getter trap probe | `cdp_probes` (off) |
+| Akamai-specific CDP / headless probes | an `Error.stack` getter trap probe; on Chromium 152/153 it did not fire for plain Playwright either (2026-10-03), so it currently detects nothing (see section 5) | `cdp_probes` (off) |
 | Hosting-ASN penalty | the built-in datacenter CIDR table adds WARN 40 | `hosting_asn_penalty` (off) |
 | Botnet clustering / network effect | fingerprint clusters inherit a bad flag | `botnet_cluster` (off; module also off) |
 | Current Akamai use of TCP/IP fingerprints | not implemented (stub, see below) | `tcp_fingerprint` (off; module also off) |
@@ -88,6 +88,23 @@ Akamai analogue.
   that do not run JavaScript; that the server checks this particular wait is an inference.
 - **`i` is read as the issue time.** The observed `var i = 1789910678` is 2026-09-20 13:24 UTC, inside the capture window, so
   the lab uses the issuing Unix time. One sample cannot prove it.
+
+## 5. Lab limitations found by the Patchright run (2026-10-03)
+
+The `patchright` matrix client (Google Chrome, headed, Patchright's documented setup) passes every
+check a web client can pass; see `RESULTS.md`, "Patchright bypass attempt". Two lab limitations
+showed up on the way:
+
+- **HTTP/2 header order is per connection, not per request.** The edge takes the order from the
+  first HEADERS frame of each HTTP/2 connection and reuses it for every later stream on it
+  (`x/net/http2` does not expose per-stream raw order; `edge/README.md`). When a `fetch` opens the
+  connection, later navigations on it are compared with a `fetch` order: with every off-by-default
+  flag on, a genuine Chrome navigation scored `header_order` WARN 22 ("63% similar") for that
+  reason. Fixing it needs per-stream HPACK decoding in the edge.
+- **No probe distinguishes Patchright from a real Chrome.** `cdp_probes` does not fire on current
+  Chromium even for plain Playwright, and nothing else in the lab looks at CDP side effects, the
+  isolated-world execution context or behaviour beyond "pointer events are present and curved".
+  Whether Akamai has such probes is not established by public sources (audit §3.1, Low).
 
 ## How to close a gap without leaving the project's boundaries
 

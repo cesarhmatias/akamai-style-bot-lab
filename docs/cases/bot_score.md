@@ -124,7 +124,9 @@ The harness judges each case from its signal, not from the action, but `RESULTS.
 chose for each request, for example: `tls_fingerprint` naive deny/aggressive (75), curl_cffi allow/human (0); `sec_cpt_challenge`
 naive challenge/strict (45); `avf_stepup` naive challenge/strict (30) and curl_cffi monitor/strict (30, downgraded because it
 held a valid `sec_cpt`); `inline_telemetry` Playwright deny/aggressive although its own signal passed, because other modules
-fired on the same transactional request.
+fired on the same transactional request. Patchright's checkout and login are serve_alternate/strict (score 70 and 78): every
+stealth check passes, but the landing page it reloads before them saw no pointer movement, so `behavioral` fails 70 and the
+lab serves the canary with a 200. With a pointer path on every page view they were allow/human.
 
 ## Limits and caveats
 

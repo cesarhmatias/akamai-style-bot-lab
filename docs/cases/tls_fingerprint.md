@@ -92,6 +92,7 @@ From the committed `RESULTS.md` (judged from the case's own signal):
 | naive (`requests`, OpenSSL) | fail | fail 75, "Non-browser TLS stack (openssl)", JA4 `t13d3112h1_e8f1e7e78f70_b26ce05bbdd6` |
 | curl_cffi `chrome131` | pass | pass 0, "Chrome-like TLS matches Chrome UA", JA4 `t13d1516h2_8daaf6152771_02713d6af862` |
 | Playwright (bundled headless shell) | warn | warn 10, "JA4 ...806a8c22fdea is a Chromium build's fingerprint (Brave 153 on Linux in public data), not Google Chrome's [medium]" |
+| Patchright (`channel="chrome"`, Google Chrome 152) | pass | pass 0, "Chrome-like TLS matches Chrome UA", JA4 `t13d1517h2_8daaf6152771_cb7bf5808d99` (17 extensions, in the known-Chrome table) |
 
 The Playwright JA4 depends on the exact Chromium build, which is why CI pins the `playwright` version.
 

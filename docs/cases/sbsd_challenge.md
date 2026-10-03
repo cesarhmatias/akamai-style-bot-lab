@@ -60,6 +60,7 @@ issuance.
 | naive | fail | fail 80, "SBSD challenge not solved for this session" |
 | curl_cffi | fail | fail 80, same (the op chain needs a JS engine) |
 | Playwright | pass | pass 0, "SBSD challenge solved" |
+| Patchright | pass | pass 0, "SBSD challenge solved" |
 
 ## Limits and caveats
 

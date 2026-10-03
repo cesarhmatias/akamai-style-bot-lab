@@ -60,6 +60,7 @@ and direction, or typing with variable intervals and dwell.
 | naive | fail | fail 90, "no sensor_data posted (no behavioral telemetry)" |
 | curl_cffi | fail | fail 90, same reason |
 | Playwright (seeded Bezier path with jitter) | pass | pass 0, "human-like behavior" |
+| Patchright (same seeded path) | pass | pass 0, "human-like behavior" (stealth patches add nothing here: the path is the harness's) |
 
 ## Limits and caveats
 

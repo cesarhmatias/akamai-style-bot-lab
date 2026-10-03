@@ -46,8 +46,9 @@ the protected storefront at `https://localhost:8443/`.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e '.[dev,clients]'                       # playwright and curl_cffi are pinned
+.venv/bin/pip install -e '.[dev,clients]'                       # playwright, patchright and curl_cffi are pinned
 .venv/bin/python -m playwright install --with-deps chromium     # Playwright client only
+.venv/bin/python -m patchright install chrome                   # Patchright client: Google Chrome (skip if installed)
 ```
 
 Run a single client (results go to a scratch folder so the committed `RESULTS.md` is not overwritten):
@@ -56,9 +57,14 @@ Run a single client (results go to a scratch folder so the committed `RESULTS.md
 .venv/bin/python -m clients.run_matrix --clients naive     --no-diff --output /tmp/lab-out
 .venv/bin/python -m clients.run_matrix --clients curl_cffi --no-diff --output /tmp/lab-out
 .venv/bin/python -m clients.run_matrix --clients playwright --no-diff --output /tmp/lab-out
+.venv/bin/python -m clients.run_matrix --clients patchright --no-diff --output /tmp/lab-out
 ```
 
-Run the whole matrix (all three clients, every case) and diff it against `clients/expected_matrix.json` (exit code 1 on
+The Patchright client runs Google Chrome headed (its documented setup), so a Chrome window opens while it runs. Use
+`xvfb-run -a .venv/bin/python -m clients.run_matrix ...` to keep it off screen, as CI does. `PATCHRIGHT_HEADLESS=1` switches
+to new headless for experiments; the expected matrix assumes headed (headless leaks `HeadlessChrome`).
+
+Run the whole matrix (all four clients, every case) and diff it against `clients/expected_matrix.json` (exit code 1 on
 drift). With no `--output` it rewrites `RESULTS.md` and `results.json` in the current directory:
 
 ```bash
@@ -265,7 +271,7 @@ headers. `docs/cases/<slug>.md` lists every threshold. A module error shows up a
    `HIGH` as lab behaviour, `MEDIUM` labelled an approximation, `LOW` labelled "unverified, vendor-sourced" and flag-gated.
 4. Make the clients know about it: add a `Case` (name, module, endpoint class, summary) to the table in `clients/common.py`
    (the runner fails when `/api/modules` has a module that is neither a case nor listed in `EXCLUDED`), and add a row to
-   `clients/expected_matrix.json` (`{"naive": "...", "curl_cffi": "...", "playwright": "..."}` with `pass`/`warn`/`fail`,
+   `clients/expected_matrix.json` (`{"naive": "...", "curl_cffi": "...", "playwright": "...", "patchright": "..."}` with `pass`/`warn`/`fail`,
    judged from the case's signal in the report). If a client needs a new solver, extend it in `clients/`;
    `python -m clients.run_matrix --write-expected` rewrites the fixture from a full run.
 5. Verify, then regenerate the results table:
