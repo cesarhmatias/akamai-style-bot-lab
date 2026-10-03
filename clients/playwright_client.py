@@ -2,19 +2,38 @@
 
 Visits the landing page so the page scripts run, draws a curved, jittered mouse path made of
 many individual ``mouse.move`` calls with small random sleeps, waits for every challenge
-script to finish, then requests each protected case with the browser's own network stack.
+script to finish, then requests each case with the browser's own network stack: protected
+resources by navigation, login/checkout/mobile calls by in-page ``fetch`` (so the page's
+inline-telemetry wrapper attaches its header), and the tile game by clicking the tiles.
+
+Representative DEFAULT configuration, deliberately not stealth-tuned: the User-Agent is
+overridden to Chrome/131 and ``navigator.webdriver`` is hidden with ``Object.defineProperty``.
+Both are common recipes and both are what the lab's version_consistency / header_order /
+js_integrity checks look for, so the matrix shows what they catch. RESULTS.md explains how a
+client would avoid each finding; none of that is applied here.
 """
 
 from __future__ import annotations
 
+import contextlib
 import math
 import random
 import time
 from typing import Any
 
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
-from .common import CASES, LAB_URL, CaseResult, protected_url, result_from_response
+from .common import (
+    CASE_TABLE,
+    CASES,
+    LAB_URL,
+    MOBILE_PATH,
+    REPORT_ID_HEADER,
+    USERNAME,
+    CaseResult,
+    judge,
+    row_env,
+)
 
 LABEL = "playwright"
 SEED = 1337
@@ -59,32 +78,154 @@ def human_mouse(page: Page, rng: random.Random) -> None:
         pos = target
 
 
+def settle_landing(page: Page, timeout_ms: int = 20_000) -> None:
+    """Wait for the landing page's scripts (sensor, PoW, pixel, SBSD) like a patient visitor."""
+    for flag in DONE_FLAGS:  # a flag that never flips just means that script did not finish
+        with contextlib.suppress(Exception):
+            page.wait_for_function(f"window.{flag} === true", timeout=timeout_ms)
+
+
+def visit_landing(page: Page, rng: random.Random, *, first: bool = False) -> None:
+    page.goto(LAB_URL + "/", wait_until="load")
+    if first:
+        human_mouse(page, rng)
+    settle_landing(page)
+    with contextlib.suppress(Exception):  # AVF step-up script: present only when requested
+        page.wait_for_function("window.__akStepupDone === true", timeout=3_000)
+
+
+def in_page_post(page: Page, path: str, body: dict[str, Any] | None) -> tuple[int, str | None]:
+    """``fetch`` from the landing page, so the page's wrappers (inline telemetry) apply."""
+    script = """async ([path, body]) => {
+        const init = body === null ? {} : {method: 'POST', body: JSON.stringify(body),
+            headers: {'Content-Type': 'application/json'}};
+        const r = await fetch(path, init);
+        await r.text();
+        return [r.status, r.headers.get('x-lab-report-id')];
+    }"""
+    status, report_id = page.evaluate(script, [path, body])
+    return int(status), report_id
+
+
+def solve_tiles(page: Page, rng: random.Random) -> str | None:
+    """Click the highlighted tiles in order with a curved, jittered pointer path.
+
+    Returns the report id of the request the page re-issues after the game, or None."""
+    page.wait_for_selector(".sec-bc-tile-parent button", timeout=10_000)
+    order = [
+        part.strip()
+        for part in page.inner_text(".sec-bc-text-container b").split("\u2192")
+        if part.strip()
+    ]
+    buttons = page.query_selector_all(".sec-bc-tile-parent button")
+    tiles = {b.inner_text().strip(): b for b in buttons}
+    pos = (rng.uniform(20, 80), rng.uniform(20, 80))
+    page.mouse.move(*pos)
+    time.sleep(rng.uniform(0.5, 0.9))  # a person reads the instructions first
+    for n, label in enumerate(order):
+        box = tiles[label].bounding_box()
+        if box is None:
+            return None
+        target = (
+            box["x"] + box["width"] * rng.uniform(0.3, 0.7),
+            box["y"] + box["height"] * rng.uniform(0.3, 0.7),
+        )
+        for x, y in bezier_path(rng, pos, target, points=30):
+            page.mouse.move(x, y)
+            time.sleep(rng.uniform(0.008, 0.025))
+        pos = target
+        time.sleep(rng.uniform(0.12, 0.35))
+        if n == len(order) - 1:
+            with page.expect_navigation(timeout=20_000) as nav:
+                page.mouse.click(*pos)
+            resp = nav.value
+            return resp.headers.get(REPORT_ID_HEADER) if resp else None
+        page.mouse.click(*pos)
+        time.sleep(rng.uniform(0.2, 0.6))
+    return None
+
+
+def new_context(browser: Browser) -> BrowserContext:
+    """The client's one default configuration: UA override plus the webdriver JS override."""
+    ctx = browser.new_context(
+        ignore_https_errors=True,
+        user_agent=USER_AGENT,
+        viewport={"width": 1280, "height": 800},
+        locale="en-US",
+        extra_http_headers={"X-Lab-Client": LABEL},
+    )
+    ctx.add_init_script(STEALTH_JS)
+    return ctx
+
+
+def play_tile_game(browser: Browser, rng: random.Random) -> tuple[int, str | None]:
+    """A visitor who arrives straight at the challenged URL in a fresh browser session.
+
+    A fresh context matters: the engine downgrades ``challenge`` to monitor for a session that
+    already holds a valid ``sec_cpt`` (the landing page's proactive solver earns one), so the
+    tile game is only ever served to a session that has not solved another challenge."""
+    ctx = new_context(browser)
+    try:
+        page = ctx.new_page()
+        resp = page.goto(f"{LAB_URL}/protected/interactive_challenge", wait_until="load")
+        status = resp.status if resp else 0
+        if resp and resp.headers.get("content-type", "").startswith("text/html"):
+            return status, solve_tiles(page, rng)
+        return status, resp.headers.get(REPORT_ID_HEADER) if resp else None
+    finally:
+        ctx.close()
+
+
 def run(cases: list[str] | None = None) -> list[CaseResult]:
     rng = random.Random(SEED)
-    out: list[CaseResult] = []
+    wanted = cases or CASES
+    out: dict[str, CaseResult] = {}
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
-        ctx = browser.new_context(
-            ignore_https_errors=True,
-            user_agent=USER_AGENT,
-            viewport={"width": 1280, "height": 800},
-            locale="en-US",
-            extra_http_headers={"X-Lab-Client": LABEL},
-        )
-        ctx.add_init_script(STEALTH_JS)
+        ctx = new_context(browser)
         page = ctx.new_page()
-        page.goto(LAB_URL + "/", wait_until="load")
-        human_mouse(page, rng)
-        for flag in DONE_FLAGS:
-            page.wait_for_function(f"window.{flag} === true", timeout=20_000)
-        for case in cases or CASES:
-            resp = page.goto(protected_url(case), wait_until="load")
-            status = resp.status if resp else 0
-            body: Any = None
-            try:
-                body = resp.json() if resp else None
-            except Exception:
-                body = None
-            out.append(result_from_response(LABEL, case, status, body))
+        visit_landing(page, rng, first=True)
+        on_landing = True
+        for case in wanted:
+            kind = CASE_TABLE[case].endpoint
+            with row_env(case):
+                if case == "interactive_challenge":
+                    status, rid = play_tile_game(browser, rng)
+                    note = "tile game played with a curved pointer path, in a fresh session"
+                    out[case] = judge(LABEL, case, status, rid, note)
+                    continue
+                if kind == "protected" and case != "avf_stepup":
+                    resp = page.goto(f"{LAB_URL}/protected/{case}", wait_until="load")
+                    on_landing = False
+                    status = resp.status if resp else 0
+                    rid = resp.headers.get(REPORT_ID_HEADER) if resp else None
+                    out[case] = judge(LABEL, case, status, rid)
+                    continue
+                # cases that need the storefront page: step-up script, login/checkout, mobile
+                if not on_landing:
+                    visit_landing(page, rng)
+                    on_landing = True
+                if case == "avf_stepup":
+                    resp = page.goto(f"{LAB_URL}/protected/{case}", wait_until="load")
+                    on_landing = False
+                    out[case] = judge(
+                        LABEL,
+                        case,
+                        resp.status if resp else 0,
+                        resp.headers.get(REPORT_ID_HEADER) if resp else None,
+                    )
+                elif kind == "login":
+                    status, rid = in_page_post(
+                        page, "/api/login", {"username": USERNAME, "password": "hunter2-hunter2"}
+                    )
+                    out[case] = judge(LABEL, case, status, rid)
+                elif kind == "checkout":
+                    status, rid = in_page_post(page, "/api/checkout", {"qty": 1})
+                    out[case] = judge(LABEL, case, status, rid)
+                elif kind == "mobile":
+                    status, rid = in_page_post(page, MOBILE_PATH, None)
+                    out[case] = judge(
+                        LABEL, case, status, rid, "browser has no native SDK header to send"
+                    )
         browser.close()
-    return out
+    return [out[c] for c in wanted]
