@@ -5,6 +5,10 @@ edge in `edge/`. Method: one search track per topic, primary sources first, each
 least one independent source where one exists. Two suspected lab defects were re-checked by running the lab's own
 scoring functions on published browser fingerprints.
 
+Revised 2026-10-02 (case 6: the interstitial is a real mechanism) and 2026-10-03 (case 1: the rarity note cited a JA4
+that the lab's own edge had produced by mistake; Chrome 152 markers; case 6: interstitial scoring, cookie timing and the
+meta-refresh path, checked against the lab's `RESULTS.md`).
+
 **Source tiers** (the tag follows each citation)
 
 - **[P]** primary: Akamai TechDocs and API reference, Akamai blogs, product briefs, press releases and research;
@@ -35,7 +39,9 @@ or encoding algorithms, and nothing in it requires sending automated traffic to 
   integrity probes (the Playwright client's `webdriver` override is detectable), and Content Protector's 2026
   interactive behavioral challenge with step-up data collection.
 - **Fingerprints now age in weeks.** Chrome moved to a two-week stable cadence with Chrome 153 (2026-09-08). The lab's
-  `chrome131` impersonation profile is about 23 majors old, and Chrome's JA4 changed at least twice in 2026.
+  `chrome131` impersonation profile is about 23 majors old, and Chrome's JA4 changed at least twice in 2026. Chrome 152
+  also put a random GREASE value in `signature_algorithms`, which makes JA4 change on every connection in
+  implementations that don't drop it (the lab's edge did not, until 2026-10-02).
 
 ## 1. Accuracy audit
 
@@ -43,7 +49,7 @@ or encoding algorithms, and nothing in it requires sending automated traffic to 
 
 | # | Case | Status | What to fix | Sources (dates) |
 |---|---|---|---|---|
-| 1 | `tls_fingerprint` | Needs correction | Add a Safari/WebKit family (real Safari fails today); use 2024–26 Chrome markers (ML-KEM group `4588`, ALPS `17613`, ML-DSA sigalgs) for version checks; flag a non-permuted extension order; refresh JA4 examples and the `chrome131` profile | [Akamai paper, 06/2017][wp17] [P]; [cipher stunting, 2019][stunt] [P]; [JA4 API, 2026-05-28][ja4api] [P]; [curl_cffi #530, 2025-04-05][cc530] [S]; [#500, 2025-02-15][cc500] [S]; [#854, 2026-09-10][cc854] [S] |
+| 1 | `tls_fingerprint` | Needs correction | Add a Safari/WebKit family (real Safari fails today); use 2024–26 Chrome markers (ML-KEM group `4588`, ALPS `17613`, ML-DSA sigalgs, and in 152 a GREASE signature algorithm and `trust_anchors`) for version checks; drop GREASE from the JA4 signature list; flag a non-permuted extension order; refresh JA4 examples and the `chrome131` profile | [Akamai paper, 06/2017][wp17] [P]; [cipher stunting, 2019][stunt] [P]; [JA4 API, 2026-05-28][ja4api] [P]; [curl_cffi #530, 2025-04-05][cc530] [S]; [#500, 2025-02-15][cc500] [S]; [#854, 2026-09-10][cc854] [S]; [tls-client #262, 2026-08-01][tc262] [S]; [fingerproxy #44, 2026-09-06][fp44] [S]; [utls PR #1, 2026-09-04][utls1] [S] |
 | 2 | `h2_fingerprint` | Outdated (Safari profile); format accurate | Safari 18 is `2:0;3:100;4:2097152;9:1\|10420225\|0\|m,s,a,p` (iOS adds `8:1`); absent WU is `00` in the paper; the labeled form is not Akamai's literal format; optionally record HEADERS-frame priority | [Akamai paper, 06/2017][wp17] [P]; [lexiforest, 2025-04-10][lexi] [S]; [curl_cffi #530][cc530] [S] |
 | 3 | `header_order` | Needs correction | Add `zstd` (Chrome 123+); `priority` only on h2/h3 (Chrome 124+), so flag it on HTTP/1.1; reduced-UA format; UA major equals `sec-ch-ua` major; `HeadlessChrome` tokens | [detection methods, 2026-03-01][detm] [P]; [priority I2S, 2024-02-16][prio] [P]; [zstd I2S, 2024][zstd] [P]; [UA reduction][uar] [P]; [curl_cffi #785, 2026-06-19][cc785] [S] |
 | 4 | `abck_cookie` | Needs correction | Real shape `HEX32~flag~YAAQ…~-1~-1~-1` (lab: 64 hex chars and two `-1`); add an "N posts, no `~0~`" mode; bind validated state to fingerprint continuity | [httpx #2287, 2022-06-30][httpx] [S]; [Coraza #1620, 2026-05-18][coraza] [S]; [Hyper docs][hyper] [V] |
@@ -90,18 +96,31 @@ Corrections:
    - Chrome 150 prepends ML-DSA signature schemes: its JA4_r signature list starts `0904,0905,0906,…`
      ([curl_cffi #854, 2026-09-10][cc854] [S]). Go 1.27 also advertises ML-DSA ([Go #81199][goiss] [S]), so treat it
      as an era marker only together with other Chrome marks.
+   - Chrome 152 puts a random GREASE value first in `signature_algorithms` (`kTlsGreaseSigalgs`), redrawn on every
+     handshake ([tls-client #262, 2026-08-01][tc262] [S]; [fingerproxy #44, 2026-09-06][fp44] [S]), and adds a
+     `trust_anchors` extension, 0xCA34 ([jawah/utls PR #1, 2026-09-04][utls1] [S]). JA4 drops GREASE everywhere, the
+     signature list included; an implementation that keeps it produces a different JA4_c on every connection, as
+     fingerproxy did (8 distinct values over 8 handshakes). Playwright's headless shell 153 sends the GREASE value but
+     only 16 extensions, so `trust_anchors` is most likely Chrome's 17th (an inference from the counts). Both are
+     usable era markers when present; neither proves anything when absent.
    - Chrome's JA4 went from `t13d1516h2_8daaf6152771_02713d6af862` (about 120–131) and `…_d8a2da3f94cd` (about 133–149)
      to `t13d1517h2_8daaf6152771_cb7bf5808d99` on 152–154 ([Scrapfly JA4 DB][ja4db] [V]; [Clearcote, Chrome 153][cc153]
-     [S]). `KNOWN_FINGERPRINTS["chrome-ja4"]` is only illustrative, but it is stale.
+     [S]; fingerproxy #44 reports the same value for 152–155 once GREASE is dropped [S]). `KNOWN_FINGERPRINTS["chrome-ja4"]`
+     is only illustrative, but it is stale.
 3. **Use permutation as a signal.** Chrome 110+ shuffles extension order on every connection. A "Chrome" that
    presents the same raw `x-tls-exts` order on every connection is not behaving like Chrome, and the edge already emits
    the data. Whether Akamai uses this exact check is not public.
 4. **Profile age.** Chrome moved to a two-week stable cadence starting with Chrome 153 on 2026-09-08
    ([Chrome blog, 2026-03-03][twoweek] [P]). `chrome131` (November 2024) is about 23 majors behind. Akamai does not
    publish whether it penalizes old but genuine versions; the measurable risk is cross-layer version mismatch (§2.2).
-5. **Rarity.** The lab's Playwright JA4 (`…_cca3cc876f32`) returned no public matches when searched on 2026-10-02;
-   curl_cffi's did. Akamai says a bot detected at one customer is added to its known-bot library "for all customers
-   within minutes" ([brief, 10/2023][bmbrief] [P]), so "fingerprint never seen in real traffic" is a fair lab signal.
+5. **Rarity (corrected 2026-10-03).** The first version of this note said the lab's Playwright JA4 (`…_cca3cc876f32`)
+   had no public matches. That value was produced by the lab's own edge, which hashed Chrome 152's GREASE signature
+   algorithm, so it changed on every connection (fixed in commit `1aeef6a`); no browser presents it. The stable value,
+   `t13d1516h2_8daaf6152771_806a8c22fdea`, is public: Scrapfly lists it as Brave 153 on Linux, seen 2026-09-13
+   ([Scrapfly][ja4brave] [V]). It is a real Chromium hello, just not Google Chrome's (16 extensions, no `trust_anchors`),
+   so the lab's check means "not Google Chrome", not "never seen", and it also fires for real Brave users, whose UA reads
+   as Chrome. Akamai says a bot detected at one customer is added to its known-bot library "for all customers within
+   minutes" ([brief, 10/2023][bmbrief] [P]), so fingerprint reputation is a fair lab signal, at a low score.
 
 #### Case 2: `h2_fingerprint`
 
@@ -228,26 +247,36 @@ Current values:
   JavaScript" ([brief, 10/2023][bmbrief] [P]). Two independent 2026 sources describe the same artifact:
   - A cookieless client gets HTTP 200 (about 2.1–2.4 KB) with a `bm-verify` token and one line of arithmetic,
     `var i = 1789910678; var j = i + Number("3886" + "11036");`. The page's script POSTs
-    `{"bm-verify": token, "pow": i + 388611036}` to `/_sec/verify?provider=interstitial` and reloads. The success
-    response sets `_abck` and `bm_sz` alongside `ak_bmsc`, and the cleared session kept getting the real page
-    ([bershka-scraper README, measured 2026-09-19 to 09-22][bershka] [S]).
+    `{"bm-verify": token, "pow": i + 388611036}` to `/_sec/verify?provider=interstitial` and reloads. The page sets
+    only the site's own session cookies; the verify response sets `_abck`, `bm_sz` and `ak_bmsc`, and the cleared
+    session kept getting the real page (five further requests) ([bershka-scraper README, measured 2026-09-19 to
+    09-22][bershka] [S]).
   - The interstitial body carries the markers `bm-verify=AAQ…`, `/interstitial/ic.html`, `/_sec/verify` and
     `triggerInterstitialChallenge()`, plus `<meta http-equiv="refresh" content="5; URL='<url>&bm-verify=AAQ…'">`.
-    The token is one-shot: refetching with it returns the real page once, and a second interstitial is final
-    ([sugarplum issue #172][sugar172] and [PR #177][sugar177], both 2026-09-27 [S]).
+    The token is single-use: refetching the URL with it returns the real page, with no JavaScript, and a second
+    interstitial is final ([sugarplum issue #172][sugar172] and [PR #177][sugar177], both 2026-09-27 [S]).
   - A third, unpublished observation from the lab owner's own HAR-derived client (2026) matches the same shape: the
     `var i = <int>;` / `var j = i + Number("<a>" + "<b>");` pair, a `"bm-verify"` field in the script, and a JSON POST
     to `/_sec/verify?provider=interstitial`. That client also tolerates an optional same-origin JSON `location` in the
     verify response; no source above shows one, so treat it as unconfirmed.
 
   Confidence: **Medium** (concept primary; artifacts from two independent 2026 secondary sources). Because a regex can
-  solve the basic arithmetic without running JavaScript, the lab should treat solving it as weak evidence (warn, not
-  pass) and may add a lab-only hardened variant that randomizes the expression shape to break fixed regexes.
+  solve the basic arithmetic without running JavaScript, the lab should treat solving it as weak evidence: warn, not
+  pass, but in the monitor band (1–20 in the brief's example, §2.1), because the cleared session kept getting the real
+  page; a warn in the challenge band would challenge it again (revised 2026-10-03, after the lab's `RESULTS.md` showed
+  exactly that). The lab may add a lab-only hardened variant that randomizes the expression shape to break fixed regexes.
+
+  Three further readings of the same sources, all inferences: the 5-second refresh with the single-use token looks
+  like the brief's "time penalty" for clients that don't run JavaScript; the observed `i`, 1789910678, is 2026-09-20
+  13:24 UTC, inside the capture window, so it is probably the issue time (one sample); and the answer, 2,178,521,714,
+  is above 2³¹−1, which overflows a 32-bit signed integer.
 - Lab gaps: no minimum duration (a fast solver passes instantly), no 428, and the `sec_cpt` cookie is never checked.
 - Fix: store `issued_at` with the challenge and reject a correct answer that arrives before `chlg_duration`; return
   428 JSON to `Accept: application/json` and the iframe page to navigations; support `count > 1`; re-challenge after
   the interval; validate `sec_cpt`; model the arithmetic variant as the cookieless `bm-verify` interstitial with
-  verification at `/_sec/verify?provider=interstitial`.
+  verification at `/_sec/verify?provider=interstitial`. Because the page itself sets no Akamai cookie, clear the gate
+  on server-side state: a gate keyed on cookie presence is passed by a plain reload in a lab that hands cookies out with
+  the page.
 
 #### Case 7: `pixel_challenge` (and `bm_sz`)
 
@@ -331,8 +360,8 @@ Current values:
 - **Responses to TLS impersonation:** Akamai never names curl_cffi or uTLS. Its public answer is cross-layer
   consistency ("browser impersonation detection", "browser version mismatches", JavaScript-side traits checked against
   protocol data) plus JA4 exposure, TLS-fingerprint client lists and TLS-fingerprint rate limiting. Community issue
-  trackers show the practical tells: a stale ALPS codepoint, missing ML-DSA signature schemes, and `priority` on
-  HTTP/1.1.
+  trackers show the practical tells: a stale ALPS codepoint, missing ML-DSA signature schemes, a missing GREASE
+  signature algorithm since Chrome 152, and `priority` on HTTP/1.1.
 - **Server-side versus client-side:** more edge signals are exposed to customers (JA4 header, TLS-fingerprint
   identifiers, the EdgeWorkers bot segment since December 2025). Client-side collection is becoming on-demand (AVF) and
   inline. Good bots get an identity path (Web Bot Auth, November 2025), and AI bots got three categories
@@ -367,7 +396,8 @@ The features below are ordered by value for an Akamai-fidelity lab.
 - **Observable artifacts:** none on the client; you only see a challenge or block.
 - **Verdict:** High, and cheap.
 - **How to simulate:** derive a minimum version from passive markers (TLS group 4588 → 131+, ALPS 17613 → 133+,
-  ML-DSA signature schemes in a Chrome-shaped hello → 150+, `zstd` → 123+, `priority` on h2 → 124+) and compare it with
+  ML-DSA signature schemes in a Chrome-shaped hello → 150+, a GREASE signature algorithm or `trust_anchors` → 152+,
+  `zstd` → 123+, `priority` on h2 → 124+) and compare it with
   the UA major, the `sec-ch-ua` major and the sensor's `navigator.userAgentData`. Then check your own Playwright run:
   the client pins the UA to `Chrome/131.0.0.0` while the bundled Chromium is a different build. Look in the dashboard
   for whether `sec-ch-ua` and the JA4 era agree with it; overriding the UA without client-hint metadata commonly leaves
@@ -556,6 +586,10 @@ The features below are ordered by value for an Akamai-fidelity lab.
 | Deny-page text and reference format | High | Microsoft Learn and Akamai docs |
 | Safari 18 TLS and H2 values | Medium | Two 2025 captures; Safari 26 has shipped since and may differ |
 | ML-DSA signature schemes in Chrome 150+ | Medium | One issue plus client-library PRs; no Chromium doc found |
+| Chrome 152: GREASE value first in `signature_algorithms` | Medium | Two independent client-library issues (2026-08, 2026-09) plus the lab's own Chromium 153 capture; no Chromium doc read |
+| Chrome 152: `trust_anchors` extension (0xCA34) | Medium | One client-library PR (2026-09), consistent with the extension count rising from 16 to 17 in three JA4 sources |
+| `trust_anchors` is the 17th extension in Chrome's JA4 `1517` | Low | Inference from extension counts |
+| The lab's Playwright JA4 `…_806a8c22fdea` is Brave 153 on Linux in public data | Medium | One vendor database entry plus the lab's own capture |
 | Chrome JA4 strings per version | Medium | Vendor database plus one release-notes site |
 | `_abck` and `bm_sz` shapes | Medium | Two public captures (2022, 2026) |
 | Random sensor path, POST to the same path, 1–3 posts | Medium | Vendor docs, Akamai's "dynamic obfuscation" claim, a 2019 sighting |
@@ -563,6 +597,8 @@ The features below are ordered by value for an Akamai-fidelity lab.
 | sec-cpt artifacts: 428, iframe, providers, `~3~` | Medium | Vendor docs, a 2020 sandbox capture, a 2026 PR |
 | Cookieless `bm-verify` interstitial (arithmetic `pow`, `/_sec/verify?provider=interstitial`, cookies on success) | Medium | Akamai brief (concept) plus two independent 2026 captures; corrects the earlier "no analogue" claim |
 | JSON `location` in the interstitial verify response | Low | Only tolerated by one unpublished client; published sources show reload or meta refresh |
+| Interstitial page sets no Akamai cookie; the verify response sets `_abck`, `bm_sz`, `ak_bmsc` | Medium | One 2026 capture (bershka) |
+| The meta refresh is the brief's "time penalty"; `i` is the issue time | Low | Inferences from the brief's wording and one sample |
 | Behavioral-challenge markup classes | Medium | One 2026 PR, consistent with Akamai's 2026 blog |
 | Pixel artifacts | Medium | 2019 captures, a 2026 PR, vendors |
 | `Akamai-User-Risk` format | Medium | Integrator doc (2025), Auth0, Akamai brief (header injection) |
@@ -599,8 +635,8 @@ The features below are ordered by value for an Akamai-fidelity lab.
 7. The pixel POST body, and which cookie changes afterwards.
 8. Deny responses: `Server`, `Mime-Version`, the reference format. Tarpit and serve-alternate are hard to observe by
    design.
-9. Whether a non-permuted extension order, a stale Chrome version or missing ML-DSA signature schemes get flagged in
-   practice.
+9. Whether a non-permuted extension order, a stale Chrome version, missing ML-DSA signature schemes or a missing
+   GREASE signature algorithm get flagged in practice.
 10. Safari 26's current TLS and H2 values.
 
 How to collect these without leaving the project's boundaries: record a HAR in your everyday browser during an ordinary
@@ -620,6 +656,10 @@ third-party sites, and scrub cookies and tokens from HARs before committing them
   validation. Site disclosures are unreliable for cookie purposes.
 - **Clearcote.** Its Chrome release notes are a single source of unknown provenance; I used them only for JA4 and
   `sec-ch-ua` examples that Scrapfly's database corroborates.
+- **The lab's own fingerprints.** Before edge commit `1aeef6a` (2026-10-02) the lab's JA4 kept Chrome 152's GREASE
+  signature algorithm, so the Playwright value I searched for in the first version of case 1 came from a bug, not
+  from the browser. Re-check any fingerprint a lab component reports against a public database before drawing
+  conclusions from it.
 - **Login-gated docs.** Akamai's Bot Manager API reference and SDK docs require a login, so detection-name lists and
   the SDK header docs could not be read directly.
 
@@ -669,6 +709,10 @@ third-party sites, and scrub cookies and tokens from HARs before committing them
 [cc530]: https://github.com/lexiforest/curl_cffi/issues/530
 [cc785]: https://github.com/lexiforest/curl_cffi/issues/785
 [cc854]: https://github.com/lexiforest/curl_cffi/issues/854
+[tc262]: https://github.com/bogdanfinn/tls-client/issues/262
+[fp44]: https://github.com/wi1dcard/fingerproxy/issues/44
+[utls1]: https://github.com/jawah/utls/pull/1
+[ja4brave]: https://scrapfly.io/web-scraping-tools/ja4-fingerprint/t13d1516h2_8daaf6152771_806a8c22fdea
 [goiss]: https://github.com/golang/go/issues/81199
 [ja4db]: https://scrapfly.io/web-scraping-tools/ja4-fingerprint/t13d1517h2_8daaf6152771_cb7bf5808d99
 [ja4safari]: https://scrapfly.io/web-scraping-tools/ja4-fingerprint/t13d2014h2_a09f3c656075_14788d8d241b
