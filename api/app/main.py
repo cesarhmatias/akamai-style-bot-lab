@@ -218,6 +218,10 @@ def create_app(
         for m in await registry.enabled_modules():
             resp = await m.pre_request(request, ctx)
             if resp is not None:
+                if resp.headers.get("content-type", "").startswith("text/html"):
+                    # waiting room / cookieless gate pages still carry the sensor/pixel snippets
+                    markup = await page_markup(registry, ctx, exclude_challenge_providers=True)
+                    resp = inject_before_body_end(resp, markup)
                 await finalize_cookies(request, resp, store)
                 return resp
         return None

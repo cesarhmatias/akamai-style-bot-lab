@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+from app.contract import DetectionModule, RequestContext, Signal, Verdict
 from app.main import create_app
 from app.modules.visitor_prioritization import VisitorPrioritization, bucket
 from app.store import MemoryStore
@@ -111,3 +112,28 @@ async def test_dropped_cookie_is_restored_and_evaluate_skips() -> None:
         assert "lab_vp_allowed" in r.cookies
         rep = (await c.get("/protected/visitor_prioritization")).json()["report"]
         assert rep["signals"][0]["verdict"] == "skip"
+
+
+class Snip(DetectionModule):
+    slug = "snip"
+    title = "Snip"
+    description = "adds a per-session snippet to every lab HTML page"
+    category = "js"
+
+    async def evaluate(self, ctx: RequestContext) -> Signal:
+        return self.signal(Verdict.PASS, 0, "ok")
+
+    async def page_snippets(self, ctx: RequestContext) -> list[str]:
+        return [f'<script src="/s/{ctx.session_id[:4]}.js"></script>']
+
+
+async def test_waiting_room_page_still_carries_page_snippets() -> None:
+    clock = Clock()
+    mod = VisitorPrioritization(admit_percent=0, wait_seconds=30, clock=clock)
+    app = create_app(store=MemoryStore(), modules=[mod, Snip()])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        await c.put("/api/modules/visitor_prioritization", json={"enabled": True})
+        c.cookies.set("bm_sz", "ab12" + "0" * 28 + "~00000000")
+        r = await c.get("/", headers={"accept": "text/html"})
+        assert "waiting room" in r.text and '<script src="/s/ab12.js">' in r.text
+        assert "lab_vp_waiting" in r.headers["set-cookie"]  # cookies survive the injection

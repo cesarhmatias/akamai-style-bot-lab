@@ -100,6 +100,13 @@ def alt_order(order: dict[str, Any], canary: str) -> dict[str, Any]:
     }
 
 
+def _copy_headers(src: Response, dst: Response) -> None:
+    """Copy every header except the body-derived ones, keeping repeated Set-Cookie lines."""
+    for k, v in src.raw_headers:
+        if k.lower() not in {b"content-length", b"content-type"}:
+            dst.raw_headers.append((k, v))
+
+
 def merge_json(resp: Response, extra: dict[str, Any]) -> Response:
     """Return a JSONResponse equal to ``resp`` with ``extra`` keys added (challenge JSON)."""
     try:
@@ -107,11 +114,7 @@ def merge_json(resp: Response, extra: dict[str, Any]) -> Response:
     except (ValueError, AttributeError):
         return resp
     out = JSONResponse({**extra, **body}, status_code=resp.status_code)
-    for k, v in resp.headers.items():
-        if k.lower() not in {"content-length", "content-type"}:
-            out.headers[k] = v
-    for raw in resp.headers.getlist("set-cookie"):
-        out.headers.append("set-cookie", raw)
+    _copy_headers(resp, out)
     return out
 
 
@@ -122,9 +125,7 @@ def inject_before_body_end(resp: Response, markup: str) -> Response:
     idx = text.lower().rfind("</body>")
     text = text[:idx] + markup + text[idx:] if idx >= 0 else text + markup
     out = HTMLResponse(text, status_code=resp.status_code)
-    for k, v in resp.headers.items():
-        if k.lower() not in {"content-length", "content-type"}:
-            out.headers[k] = v
+    _copy_headers(resp, out)
     return out
 
 
