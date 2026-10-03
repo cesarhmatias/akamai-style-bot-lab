@@ -39,6 +39,7 @@ Any client-supplied header with these names is stripped first (anti-spoofing; co
 | `x-tls-sigalgs` | `0904,0905,0906,0403,0804,...` signature_algorithms (ext 13), 4-digit hex, wire order |
 | `x-tls-alpn` | `h2,http/1.1` ALPN protocols the client offered, wire order |
 | `x-tls-alps` | `17613`, `17513` or `none`: which ALPS codepoint (if any) the hello carries |
+| `x-tls-conn` | `3f9a1c0b77de` opaque per-connection id (first 12 hex of sha256 of the client random); lets the API count distinct connections |
 | `x-h2-fingerprint` | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` (h2 only; Akamai 2017 paper format) |
 | `x-h2-fingerprint-labeled` | `S[1:65536;2:0;4:6291456;6:262144]\|WU[15663105]\|P[0]\|PS[m,a,s,p]` (h2 only; lab notation, see below) |
 | `x-h2-headers-priority` | `1:0:256` (`exclusive:dep:weight` of the first HEADERS frame, weight = wire byte + 1) or `none` (h2 only) |

@@ -113,6 +113,20 @@ func TestALPSVariants(t *testing.T) {
 	}
 }
 
+func TestConnIDDiffersPerHandshake(t *testing.T) {
+	a := chromeLikeHello(17613, []uint16{29}, []uint16{0x0403})
+	b := append([]byte(nil), a...)
+	b[5+4+2] ^= 0xff // flip a byte of the client random
+	ha, _ := ParseClientHello(a)
+	hb, _ := ParseClientHello(b)
+	if len(ha.ConnID()) != 12 || ha.ConnID() == hb.ConnID() {
+		t.Errorf("conn ids %q %q", ha.ConnID(), hb.ConnID())
+	}
+	if (&Hello{}).ConnID() != "" {
+		t.Error("empty hello must have no conn id")
+	}
+}
+
 func TestEmptyHelloFields(t *testing.T) {
 	h := &Hello{}
 	if h.GroupsWire() != "" || h.SigAlgsWire() != "" || h.ALPNWire() != "" || h.ALPSWire() != "none" {
@@ -146,7 +160,7 @@ func TestForwardStripsSpoofedHeaders(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		hTLSGroups: "4588,29", hTLSSigAlg: "0403", hTLSALPN: "h2,http/1.1", hTLSALPS: "17613",
-		hH2HdrPri: "1:0:256", hClientIP: "10.0.0.9",
+		hH2HdrPri: "1:0:256", hClientIP: "10.0.0.9", hTLSConn: h.ConnID(),
 	} {
 		if got := seen.Get(name); got != want {
 			t.Errorf("%s = %q want %q", name, got, want)

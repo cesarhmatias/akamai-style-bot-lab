@@ -23,6 +23,7 @@ type Hello struct {
 	ALPN        []string // application_layer_protocol_negotiation (16)
 	SupVersions []uint16 // supported_versions (43)
 	HasSNI      bool
+	Random      []byte // client random (32 bytes); unique per connection
 }
 
 // isGrease reports whether v is a GREASE value (RFC 8701): 0x?a?a with equal bytes.
@@ -110,7 +111,7 @@ func ParseClientHello(raw []byte) (*Hello, error) {
 		return nil, r.err
 	}
 	h := &Hello{Version: body.u16()}
-	body.take(32)        // random
+	h.Random = append([]byte(nil), body.take(32)...) // random
 	body.take(body.u8()) // session id
 	cs := &reader{b: body.take(int(body.u16()))}
 	for len(cs.b) >= 2 && cs.err == nil {
@@ -268,6 +269,18 @@ func (h *Hello) ALPSWire() string {
 		}
 	}
 	return res
+}
+
+// ConnID is a short opaque per-connection identifier: the first 12 hex digits of
+// sha256(client random). The random is fresh for every handshake and is public on the wire, so
+// requests on one (keep-alive or multiplexed) connection share a value and new connections
+// differ. It lets the API count distinct connections (e.g. repeated extension order).
+func (h *Hello) ConnID() string {
+	if len(h.Random) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(h.Random)
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 func sha12(s string) string {

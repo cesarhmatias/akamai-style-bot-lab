@@ -33,6 +33,7 @@ const (
 	hTLSSigAlg = "x-tls-sigalgs"
 	hTLSALPN   = "x-tls-alpn"
 	hTLSALPS   = "x-tls-alps"
+	hTLSConn   = "x-tls-conn"
 	hH2        = "x-h2-fingerprint"
 	hH2Labeled = "x-h2-fingerprint-labeled"
 	hH2HdrPri  = "x-h2-headers-priority"
@@ -42,7 +43,7 @@ const (
 )
 
 var injected = []string{
-	hJA3, hJA3Hash, hJA4, hJA3Grease, hTLSExts, hTLSGroups, hTLSSigAlg, hTLSALPN, hTLSALPS,
+	hJA3, hJA3Hash, hJA4, hJA3Grease, hTLSExts, hTLSGroups, hTLSSigAlg, hTLSALPN, hTLSALPS, hTLSConn,
 	hH2, hH2Labeled, hH2HdrPri, hOrder, hProto, hClientIP,
 }
 
@@ -213,6 +214,7 @@ func (e *edge) forward(w http.ResponseWriter, r *http.Request, info *connInfo, o
 	h.Set(hTLSSigAlg, hl.SigAlgsWire())
 	h.Set(hTLSALPN, hl.ALPNWire())
 	h.Set(hTLSALPS, hl.ALPSWire())
+	h.Set(hTLSConn, hl.ConnID())
 	if info.h2 != nil {
 		h.Set(hH2, info.h2.Canonical())
 		h.Set(hH2Labeled, info.h2.Labeled())
