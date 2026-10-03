@@ -1,12 +1,21 @@
 {
-  "tls_fingerprint": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
+  "tls_fingerprint": {"naive": "fail", "curl_cffi": "pass", "playwright": "warn"},
   "h2_fingerprint": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
-  "header_order": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
+  "header_order": {"naive": "fail", "curl_cffi": "pass", "playwright": "fail"},
+  "version_consistency": {"naive": "pass", "curl_cffi": "pass", "playwright": "fail"},
+  "known_bots": {"naive": "pass", "curl_cffi": "pass", "playwright": "pass"},
+  "ip_reputation": {"naive": "pass", "curl_cffi": "pass", "playwright": "pass"},
+  "session_validation": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
   "abck_cookie": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
   "sensor_data": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
+  "js_integrity": {"naive": "fail", "curl_cffi": "fail", "playwright": "fail"},
+  "behavioral": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
   "proof_of_work": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
   "pixel_challenge": {"naive": "fail", "curl_cffi": "pass", "playwright": "pass"},
   "sbsd_challenge": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
-  "behavioral": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
-  "ip_reputation": {"naive": "pass", "curl_cffi": "pass", "playwright": "pass"}
+  "interactive_challenge": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
+  "avf_stepup": {"naive": "warn", "curl_cffi": "warn", "playwright": "pass"},
+  "inline_telemetry": {"naive": "fail", "curl_cffi": "fail", "playwright": "pass"},
+  "account_protector": {"naive": "pass", "curl_cffi": "pass", "playwright": "pass"},
+  "native_app": {"naive": "fail", "curl_cffi": "pass", "playwright": "fail"}
 }
