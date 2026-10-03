@@ -20,3 +20,6 @@ volumes/
 edge/certs/*.pem
 edge/edge
 screenshots/
+*.egg-info/
+.idea/
+.vscode/
