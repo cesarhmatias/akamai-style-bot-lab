@@ -181,3 +181,131 @@ def test_ios_and_firefox_ua_families():
         assert ua_family(ua) == "safari", ua
     assert ua_family(FF_UA) == "firefox"
     assert ua_family(CHROME_UA) == "chrome"
+
+
+# --- era markers, extension order, rarity (audit 1.2 case 1) --------------------------------
+from app.modules.tls_fingerprint import (  # noqa: E402
+    KNOWN_CHROME_JA4,
+    KNOWN_FINGERPRINTS,
+    chrome_tls_era,
+    tls_view,
+)
+from app.store import MemoryStore  # noqa: E402
+
+CH133_JA3 = (
+    "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,"
+    "27-65037-0-23-65281-10-11-35-16-5-13-18-51-45-43-17613-21,4588-29-23-24,0"
+)
+CH133_JA4 = "t13d1516h2_8daaf6152771_d8a2da3f94cd"
+CH153_JA4 = "t13d1517h2_8daaf6152771_cb7bf5808d99"
+ORDER = "grease,27,65037,0,23,65281,10,11,35,16,5,13,18,51,45,43,17613,21,grease"
+
+
+def hdrs(**kw):
+    return [(k.replace("_", "-"), v) for k, v in kw.items()]
+
+
+def era_for(ja3="", **kw):
+    c = ctx(ja3, headers=hdrs(**kw))
+    return chrome_tls_era(tls_view(c), chrome_shaped=True)
+
+
+def test_known_ja4_table_refreshed():
+    assert "t13d1516h2_8daaf6152771_02713d6af862" in KNOWN_CHROME_JA4
+    assert "t13d1516h2_8daaf6152771_d8a2da3f94cd" in KNOWN_CHROME_JA4
+    assert "t13d1517h2_8daaf6152771_cb7bf5808d99" in KNOWN_CHROME_JA4
+    assert KNOWN_FINGERPRINTS["safari-ja4-16-18"]["ja4"].startswith("t13d2014h2_a09f3c656075_")
+
+
+def test_era_mlkem_means_131_plus():
+    e = era_for(x_tls_groups="grease,4588,29,23,24")
+    assert (e.min_major, e.max_major) == (131, None)
+
+
+def test_era_kyber_means_130_or_older():
+    e = era_for(x_tls_groups="grease,25497,29,23,24")
+    assert (e.min_major, e.max_major) == (None, 130)
+
+
+def test_era_alps_codepoints():
+    assert era_for(x_tls_alps="17613").min_major == 133
+    assert era_for(x_tls_alps="17513").max_major == 132
+    assert era_for(x_tls_alps="none").min_major is None
+
+
+def test_era_from_ja3_fallback_without_new_headers():
+    e = chrome_tls_era(tls_view(ctx(CH133_JA3, CH133_JA4)), chrome_shaped=True)
+    assert (e.min_major, e.max_major) == (133, None)  # 4588 -> 131, 17613 -> 133
+
+
+def test_era_combined_window_curl_cffi_chrome131_shape():
+    e = era_for(x_tls_groups="grease,4588,29,23,24", x_tls_alps="17513")
+    assert (e.min_major, e.max_major) == (131, 132)
+
+
+def test_era_mldsa_only_in_chrome_shaped_hello():
+    sig = "0904,0905,0906,0403,0804"
+    chrome = chrome_tls_era(tls_view(ctx(headers=hdrs(x_tls_sigalgs=sig))), chrome_shaped=True)
+    go = chrome_tls_era(tls_view(ctx(headers=hdrs(x_tls_sigalgs=sig))), chrome_shaped=False)
+    assert chrome.min_major == 150 and chrome.confidence[chrome.evidence[0]] == "medium"
+    assert go.min_major is None
+
+
+def test_signal_details_expose_era_and_confidence():
+    s = run(ctx(CH133_JA3, CH133_JA4, headers=hdrs(x_ja3_grease="1", x_tls_alps="17613")))
+    assert s.verdict == Verdict.PASS
+    assert s.details["era"]["min"] == 133
+    assert s.details["check_confidence"]["extension_order"] == "medium"
+
+
+def run_with_store(store, conn, order=ORDER, ja4=CH133_JA4, ua=CHROME_UA):
+    c = ctx(CH133_JA3, ja4, ua, hdrs(x_ja3_grease="1", x_tls_exts=order, x_tls_conn=conn))
+    c.store = store
+    return asyncio.run(TlsFingerprintModule().evaluate(c))
+
+
+def test_identical_extension_order_over_three_connections_warns():
+    store = MemoryStore()
+    assert run_with_store(store, "c1").verdict == Verdict.PASS
+    assert run_with_store(store, "c2").verdict == Verdict.PASS
+    s = run_with_store(store, "c3")
+    assert s.verdict == Verdict.WARN and s.score == 25
+    assert "extension order" in s.reason and "[medium]" in s.reason
+
+
+def test_same_connection_repeated_does_not_count():
+    store = MemoryStore()
+    for _ in range(6):
+        assert run_with_store(store, "same-conn").verdict == Verdict.PASS
+
+
+def test_permuting_chrome_never_warns():
+    store = MemoryStore()
+    orders = [ORDER, ORDER.replace("27,65037", "65037,27"), ORDER.replace("0,23", "23,0")]
+    for i, o in enumerate(orders * 3):
+        assert run_with_store(store, f"c{i}", o).verdict == Verdict.PASS
+
+
+def test_order_tracking_is_per_ip_and_ja4():
+    store = MemoryStore()
+    for i in range(3):
+        run_with_store(store, f"a{i}")
+    c = ctx(CH133_JA3, CH133_JA4, CHROME_UA,
+            hdrs(x_ja3_grease="1", x_tls_exts=ORDER, x_tls_conn="z"))
+    c.store, c.client_ip = store, "9.9.9.9"
+    assert asyncio.run(TlsFingerprintModule().evaluate(c)).verdict == Verdict.PASS
+
+
+def test_unknown_chrome_ja4_warns_low_score():
+    s = run_with_store(MemoryStore(), "c1", ja4="t13d1516h2_8daaf6152771_cca3cc876f32")
+    assert s.verdict == Verdict.WARN and s.score == 10 and s.details["ja4_known"] is False
+
+
+def test_known_chrome_153_ja4_passes_without_warning():
+    s = run_with_store(MemoryStore(), "c1", ja4=CH153_JA4)
+    assert s.verdict == Verdict.PASS
+
+
+def test_rarity_not_applied_to_other_families():
+    c = ctx(SAFARI_JA3, "t13d2014h2_a09f3c656075_e7c285222651", SAFARI_UA, _hdr("1"))
+    assert run(c).verdict == Verdict.PASS
