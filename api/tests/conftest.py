@@ -8,14 +8,16 @@ from typing import Any
 import httpx
 import pytest
 import pytest_asyncio
-
 from app.contract import RequestContext
 from app.store import MemoryStore
 
 DEFAULT_HEADERS = [
     ("host", "localhost"),
-    ("user-agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+    (
+        "user-agent",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    ),
     ("accept", "text/html,application/xhtml+xml,*/*;q=0.8"),
     ("accept-language", "en-US,en;q=0.9"),
     ("accept-encoding", "gzip, deflate, br"),
