@@ -38,7 +38,7 @@ Run a single client (results go to a scratch folder so the committed `RESULTS.md
 .venv/bin/python -m clients.run_matrix --clients playwright --no-diff --output /tmp/lab-out
 ```
 
-Run the whole matrix (all three clients, all ten cases) and diff it against `clients/expected_matrix.json`
+Run the whole matrix (all three clients, every default-enabled case) and diff it against `clients/expected_matrix.json`
 (exit code 1 on drift). With no `--output` it rewrites `RESULTS.md` and `results.json` in the current directory:
 
 ```bash
@@ -134,9 +134,11 @@ Module errors show up as a `warn` with score 10 and `details.error = true`.
 2. Add `api/tests/test_<slug>.py` using the `make_ctx` / `memory_store` / `client` fixtures from
    `api/tests/conftest.py` (see `api/tests/test_abck_cookie.py`).
 3. Add `docs/cases/<slug>.md` describing mechanism, thresholds, how a client passes, observed results.
-4. Make the clients know about it: add the slug to `CASES` in `clients/common.py`, and add a row to
+4. Make the clients know about it: add a `Case` (slug, module, endpoint class) to the table in
+   `clients/common.py` (the runner fails when `/api/modules` has a module without a case), and add a row to
    `clients/expected_matrix.json` (`{"naive": "...", "curl_cffi": "...", "playwright": "..."}` with
-   `pass`/`fail`). If a client needs a new solver, extend it in `clients/`.
+   `pass`/`warn`/`fail`, judged from the case's signal in the report). If a client needs a new solver, extend
+   it in `clients/`; `python -m clients.run_matrix --write-expected` rewrites the fixture from a full run.
 5. Verify, then regenerate the results table:
 
    ```bash
