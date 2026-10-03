@@ -79,7 +79,9 @@ async def test_n_posts_mode_needs_n_valid_posts(
     assert "~0~" not in cookies["_abck"]
 
 
-async def test_validated(make_ctx: Callable[..., RequestContext], memory_store: MemoryStore) -> None:
+async def test_validated(
+    make_ctx: Callable[..., RequestContext], memory_store: MemoryStore
+) -> None:
     await mark_abck_validated(memory_store, SID)
     s = await mod.evaluate(make_ctx(session_id=SID, cookies={"_abck": abck_cookie_value(True)}))
     assert (s.verdict, s.score) == (Verdict.PASS, 0)
